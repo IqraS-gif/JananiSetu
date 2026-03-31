@@ -41,6 +41,11 @@ export const Colors = {
   black: '#000000',
 };
 
+// ─── API Configuration ────────────────────────────────────────────────────────
+export const API_CONFIG = {
+  SERPAPI_KEY: process.env.EXPO_PUBLIC_SERPAPI_KEY || '',
+};
+
 // ─── Dimensions ──────────────────────────────────────────────────────────────
 export const Dimensions = {
   touchTarget: 60,            // Minimum 60x60 for accessibility
@@ -114,6 +119,7 @@ export const Labels = {
   learn: { hi: 'सीखें', en: 'Learn' },
   profile: { hi: 'प्रोफ़ाइल', en: 'Profile' },
   eye: { hi: 'आंखें', en: 'Eye' },
+  setu: { hi: 'सेतु', en: 'Setu' },
 
   // Dashboard
   welcome: { hi: 'नमस्ते', en: 'Hello' },
@@ -245,6 +251,9 @@ export const FoodKeywords = {
   'स्प्राउट्स': 'sprouts_moong', 'sprouts': 'sprouts_moong',
   'आँवला': 'amla', 'amla': 'amla',
   'सौंफ': 'saunf', 'saunf': 'saunf', 'fennel': 'saunf',
+  'पिज़ा': 'pizza', 'pizza': 'pizza', 'pizaa': 'pizza', 'पिज़्ज़ा': 'pizza',
+  'बर्गर': 'burger', 'burger': 'burger',
+  'पास्ता': 'pasta', 'pasta': 'pasta',
 };
 
 // ─── Quick Meal Presets ──────────────────────────────────────────────────────

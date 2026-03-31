@@ -41,6 +41,12 @@
           "microphonePermission": "This app needs access to the microphone to record your meal descriptions.",
           "speechRecognitionPermission": "This app uses speech recognition to convert your voice into meal logs."
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location."
+        }
       ]
     ]
   }

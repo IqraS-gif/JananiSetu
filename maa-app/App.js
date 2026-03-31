@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 
 import { LanguageProvider } from './src/context/LanguageContext';
+import { UserProvider } from './src/context/UserContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import {
     initDatabase,
@@ -49,9 +50,27 @@ function ErrorScreen({ message, onRetry }) {
 
 // ── Root Component ─────────────────────────────────────────────────
 
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { useFonts } from 'expo-font';
+import { 
+  Outfit_400Regular,
+  Outfit_500Medium,
+  Outfit_600SemiBold,
+  Outfit_700Bold,
+  Outfit_800ExtraBold
+} from '@expo-google-fonts/outfit';
+
 export default function App() {
     const [status, setStatus] = useState('loading'); // 'loading' | 'ready' | 'error'
     const [errorMsg, setErrorMsg] = useState('');
+
+    const [fontsLoaded] = useFonts({
+        Outfit_400Regular,
+        Outfit_500Medium,
+        Outfit_600SemiBold,
+        Outfit_700Bold,
+        Outfit_800ExtraBold,
+    });
 
     const initialise = async () => {
         setStatus('loading');
@@ -81,15 +100,19 @@ export default function App() {
         initialise();
     }, []);
 
-    if (status === 'loading') return <SplashScreen />;
+    if (status === 'loading' || !fontsLoaded) return <SplashScreen />;
     if (status === 'error') {
         return <ErrorScreen message={errorMsg} onRetry={initialise} />;
     }
 
     return (
-        <LanguageProvider>
-            <AppNavigator />
-        </LanguageProvider>
+        <SafeAreaProvider>
+            <LanguageProvider>
+                <UserProvider>
+                    <AppNavigator />
+                </UserProvider>
+            </LanguageProvider>
+        </SafeAreaProvider>
     );
 }
 

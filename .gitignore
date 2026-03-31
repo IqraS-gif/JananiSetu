@@ -10,3 +10,7 @@ build/
 .env.*.local
 
 # Subproject ignores are handled by their own .gitignore files
+
+# Ignore sensitive database exports and credentials
+*.csv
+*credentials*.json
