@@ -1,6 +1,6 @@
 # JananiSetu (जननी सेतु) 🤱
 
-[![JananiSetu Demo Video](https://img.youtube.com/vi/i2Sp_TmBdzc/0.jpg)](https://www.youtube.com/watch?v=i2Sp_TmBdzc)
+[🎥 Watch the JananiSetu Demo Video on YouTube](https://youtu.be/i2Sp_TmBdzc)
 
 **JananiSetu** is a comprehensive, AI-integrated digital health platform designed to reduce maternal mortality and improve pregnancy outcomes by bridging the knowledge gap in rural and semi-urban India.
 
