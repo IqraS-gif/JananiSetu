@@ -1,71 +1,165 @@
 # JananiSetu (जननी सेतु) 🤱
 
-**JananiSetu** is a comprehensive, AI-integrated digital health platform designed to empower expectant mothers and healthcare workers in India. This repository contains the full source code for the mobile application and the supporting machine learning services.
+**JananiSetu** is a comprehensive, AI-integrated digital health platform designed to reduce maternal mortality and improve pregnancy outcomes by bridging the knowledge gap in rural and semi-urban India.
 
 ---
 
-## 🏗️ Project Components
-
-The project is divided into two primary services:
-
-### 1. [Maa App (Mobile Application)](./maa-app/)
-A production-grade, offline-first mobile application built with **React Native (Expo)**.
-- **Nutrition Tracking**: Voice-activated logging for 7,000+ Indian food items.
-- **Clinical Scheduling**: Automated ANC visit tracking based on LMP.
-- **Eye Health**: Interactive vision tests (Acuity, Contrast, Amsler) with AI risk assessment.
-- **Bilingual**: Full support for English and Hindi.
-
-### 2. [Risk-Radar (ML Service)](./risk-radar/)
-A Python-based machine learning backend that powers the predictive health features.
-- **Diabetes Prediction**: Random Forest models for gestional diabetes risk assessment.
-- **API service**: Serves predictions to the mobile app for real-time clinical support.
+## 🛑 The Problem
+Maternal health in rural India faces significant challenges:
+- **High Maternal Mortality Ratio (MMR)**: Often due to delayed detection of risks like gestational diabetes or hypertension.
+- **Monitoring Gaps**: Expectant mothers often lack access to continuous nutritional guidance and clinical tracking.
+- **Coordination Hurdles**: Communication between mothers, ASHA workers, and doctors is often fragmented and paper-based.
+- **Low Health Literacy**: Complex medical information is often inaccessible to users with limited formal education.
 
 ---
 
-## 🌟 Mission
-Our mission is to reduce maternal mortality and improve pregnancy outcomes by bridging the knowledge gap in rural and semi-urban India through localized, accessible, and AI-driven technology.
+## 🚀 How We Solve the Problem
+
+We have designed a 3-view system tailored for:
+- **👩‍🍼 Pregnant Woman**
+- **👩‍⚕️ ASHA Worker**
+- **👨‍⚕️ Doctor**
+
+Each interface is built specifically for their real-world needs and constraints, ensuring seamless coordination and early risk detection.
+
+### 👩‍🍼 Pregnant Woman (User View)
+
+- **Smart Nutrition Logger**
+  - Provides detailed breakdown of food intake (calcium, protein, folic acid, vitamins, sodium)
+  - *(Tech: Dataset + Database + API fallback → ensures accurate nutrition data even offline)*
+  - Input via image selection / voice / food image scan
+
+- **SOS Emergency Button**
+  - Sends SMS + live location (Google Maps) to driver/contact instantly
+  - *(Tech: GPS + SMS API → enables real-time emergency alerts and tracking)*
+
+- **Janani Voice Companion**
+  - Guides users on government schemes, insurance, benefits
+  - *(Tech: LLM + RAG → delivers personalized and context-aware guidance)*
+
+- **Health Risk Prediction**
+  - **BP trends** *(Tech: LSTM → analyzes time-series data to detect early abnormalities)*
+  - **Diabetes risk** *(Tech: XGBoost → predicts risk using structured medical parameters)*
+
+- **AI Vision Scanner**
+  - Detects visible symptoms (e.g., swelling)
+  - *(Tech: CLAHE → enhances low-quality images + SSDL → detects symptoms in real-time)*
+
+- **Daily Health Tools**
+  - Water intake logger, Baby kick counter, Doctor visit history, Daily reminders
+  - *(Tech: Rule-based tracking → ensures consistent daily monitoring)*
+
+- **Report Management**
+  - Upload + extract medical reports into structured format
+  - *(Tech: OCR + parsing → converts reports into usable data)*
+
+- **Vision Tests (Clinical-based)**
+  - Contrast sensitivity, Amsler grid test, Cognitive/visual tests
+  - *(Tech: Based on validated clinical research methods)*
+
+### 👩‍⚕️ ASHA Worker (Field View)
+
+- **Smart Routing & Prioritization**
+  - Patients ranked based on risk level (Low / High / Critical)
+  - *(Tech: Risk scoring engine → prioritizes high-risk cases efficiently)*
+
+- **Complete Patient History**
+  - Access to all records, reports, and past visits
+  - *(Tech: Centralized database → ensures continuous patient tracking)*
+
+- **Medicine & Report Updates**
+  - Add/update prescriptions and view reports in real-time
+  - *(Tech: Structured data system → reduces errors and duplication)*
+
+- **Voice Notes → Structured Reports**
+  - Converts voice inputs into doctor-readable reports
+  - *(Tech: Speech-to-text → eliminates manual entry effort)*
+
+- **Risk Monitoring Dashboard**
+  - View and track high-risk pregnancies efficiently
+  - *(Tech: ML + rule engine → provides actionable insights)*
+
+### 👨‍⚕️ Doctor (Expert View)
+
+- **Structured Patient Summaries**
+  - Clean, pre-processed data for faster decision-making
+  - *(Tech: Data aggregation → reduces analysis time)*
+
+- **High-Risk Case Alerts**
+  - Immediate visibility into critical patients
+  - *(Tech: Alert system → ensures timely intervention)*
+
+- **Continuous Monitoring Access**
+  - Track patient history, trends, and ASHA notes
+  - *(Tech: Integrated system → enables end-to-end tracking)*
+
+- **Feedback Loop**
+  - Add notes/instructions visible to ASHA workers
+  - *(Tech: Connected workflow → improves coordination)*
 
 ---
 
-## 🚀 Quick Start (Local Development)
+## 🌍 Scalability & Real-World Feasibility
+- **Offline-first architecture**: Works without internet (Sync engine → auto-syncs when online)
+- **Voice-first interaction**: No typing required (Speech-to-text → easy input)
+- **Simple & intuitive UI**: Designed for low literacy users
+- **Multilingual support**: Accessible in local languages (English & Hindi)
 
+---
+
+## 🛠️ Technology Stack
+- **Frontend**: React Native, Expo, SQLite (Offline-first architecture)
+- **Backend/ML**: Python (Flask/FastAPI), Scikit-learn, XGBoost, LSTM
+- **AI**: Gemini AI (LLM) for conversational assistance and RAG-based guidance
+- **Vision**: OCR (Tesseract/EasyOCR), Image enhancement (CLAHE)
+- **Communication**: SMS Gateway Integration, Google Maps API
+
+---
+
+## 💎 Impact & Benefits
+1. **Early Intervention**: Automated risk detection reduces delays in critical care.
+2. **Empowerment**: Provides mothers with direct access to their own health data and nutritional knowledge.
+3. **Efficiency**: Streamlines the workload for ASHA workers through intelligent routing and digital documentation.
+4. **Data-Driven Decisions**: Enables doctors to make better clinical decisions with structured, long-term patient histories.
+
+---
+
+## 📁 Project Structure
 ```bash
-# Clone the repository
-git clone https://github.com/IqraS-gif/JananiSetu.git
-cd JananiSetu
-
-# To run the Mobile App
-cd maa-app
-npm install
-npx expo start
-
-# To run the ML Service
-cd ../risk-radar/ml-service
-pip install -r requirements.txt
-python app.py
+JananiSetu/
+├── maa-app/           # React Native Mobile Application (Expo)
+│   ├── database/      # SQLite schema and seed data
+│   ├── src/           # Component, Screen, and Service logic
+│   └── App.js         # Navigation and entry point
+├── risk-radar/        # ML & Prediction Services
+│   ├── ml-service/    # Python Flask/FastAPI service
+│   └── models/        # Trained XGBoost/LSTM models
+└── README.md          # Root documentation
 ```
 
 ---
 
-## 🛠️ Tech Stack
-- **Frontend**: React Native, Expo, SQLite (Offline-first).
-- **Backend/ML**: Python, Flask, Scikit-learn, Pandas.
-- **AI**: Gemini AI Integration for personalized consultation.
-- **Voice**: Expo Speech Recognition for hands-free logging.
+## 🚀 Installation & Usage
 
----
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/IqraS-gif/JananiSetu.git
+   cd JananiSetu
+   ```
 
-## 📈 Project Milestones & Status
-- [x] Core MVP Development (March 2026)
-- [x] AI Integration (Gemini/Groq)
-- [x] Initial ML Service Deployment
-- [ ] Beta Testing (April 2026)
-- [ ] Clinical Trials Support
+2. **Run the Mobile App**
+   ```bash
+   cd maa-app
+   npm install
+   npx expo start
+   ```
 
----
-
-## 📞 Contact & Support
-For any queries related to JananiSetu, please reach out to the project administrator.
+3. **Run the ML Service**
+   ```bash
+   cd ../risk-radar/ml-service
+   pip install -r requirements.txt
+   python app.py
+   ```
 
 ---
 
