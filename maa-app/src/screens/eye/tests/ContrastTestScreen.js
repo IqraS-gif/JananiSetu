@@ -3,7 +3,7 @@
  * Contrast Sensitivity Test — Sloan Letters, Pelli-Robson protocol
  * Bilingual Hindi/English, large touch buttons, fully offline.
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
     View, Text, TouchableOpacity, StyleSheet,
     ScrollView, SafeAreaView, Dimensions,
@@ -18,7 +18,7 @@ const CANVAS_H = Math.round(CANVAS_W * 0.55);
 const SLOAN = ['C', 'D', 'H', 'K', 'N', 'O', 'R', 'S', 'V', 'Z'];
 const LOG_STEP = 0.15;
 const LETTERS_PER_LEVEL = 3;
-const PHASES = ['दाईं आँख\nRight Eye', 'बाईं आँख\nLeft Eye', 'दोनों आँखें\nBoth Eyes'];
+const PHASES = ['बायीं आँख\nLeft Eye', 'दाईं आँख\nRight Eye'];
 
 function logCStoGray(logCS) {
     const contrast = Math.max(0.005, Math.pow(10, -logCS));
@@ -66,6 +66,8 @@ export default function ContrastTestScreen({ navigation }) {
     const [currentLetter, setCurrentLetter] = useState('');
     const [allPhaseResults, setAllPhaseResults] = useState({});
     const [answering, setAnswering] = useState(false);
+    const [timeLeft, setTimeLeft] = useState(40);
+    const timerRef = useRef(null);
 
     const pickLetter = useCallback(() => {
         return SLOAN[Math.floor(Math.random() * SLOAN.length)];
@@ -77,6 +79,7 @@ export default function ContrastTestScreen({ navigation }) {
         setCorrectInLevel(0);
         setLastPassedLogCS(-0.15);
         setAnswering(false);
+        setTimeLeft(40);
         setCurrentLetter(pickLetter());
         setPhase('test');
     }, [pickLetter]);
@@ -112,10 +115,10 @@ export default function ContrastTestScreen({ navigation }) {
                     setPhase('intermission');
                 } else {
                     // All done — navigate back
-                    const binocular = updated[PHASES[2]] || updated[PHASES[1]] || { logCS: finalLogCS };
+                    const finalResult = updated[PHASES[1]] || updated[PHASES[0]] || { logCS: finalLogCS };
                     navigation.navigate('EyeHealth', {
                         contrastResult: {
-                            logCS: binocular.logCS,
+                            logCS: finalResult.logCS,
                             eyeData: updated,
                         }
                     });
@@ -130,6 +133,41 @@ export default function ContrastTestScreen({ navigation }) {
         }
     }, [answering, currentLetter, correctInLevel, lettersInLevel, currentLogCS, lastPassedLogCS, phaseIndex, pickLetter, allPhaseResults, navigation]);
 
+    // Timer Effect: Pure decrement
+    React.useEffect(() => {
+        if (phase === 'test' && timeLeft > 0) {
+            timerRef.current = setInterval(() => {
+                setTimeLeft(prev => prev - 1);
+            }, 1000);
+        }
+        return () => {
+            if (timerRef.current) clearInterval(timerRef.current);
+        };
+    }, [phase]);
+
+    // Finish Condition: Check when time runs out
+    React.useEffect(() => {
+        if (phase === 'test' && timeLeft === 0) {
+            if (timerRef.current) clearInterval(timerRef.current);
+            // Complete phase when time's up
+            const finalLogCS = Math.max(0, lastPassedLogCS);
+            const phaseName = PHASES[phaseIndex];
+            const updated = { ...allPhaseResults, [phaseName]: { logCS: finalLogCS, interpretation: getInterpretation(finalLogCS) } };
+            setAllPhaseResults(updated);
+
+            if (phaseIndex < PHASES.length - 1) {
+                setPhaseIndex(pi => pi + 1);
+                setPhase('intermission');
+            } else {
+                const finalResult = updated[PHASES[1]] || updated[PHASES[0]] || { logCS: finalLogCS };
+                navigation.navigate('EyeHealth', {
+                    contrastResult: { logCS: finalResult.logCS, eyeData: updated }
+                });
+                setPhase('done');
+            }
+        }
+    }, [timeLeft, phase]);
+
     if (phase === 'instructions') {
         return (
             <SafeAreaView style={styles.safe}>
@@ -139,12 +177,9 @@ export default function ContrastTestScreen({ navigation }) {
                     <View style={styles.card}>
                         <Text style={styles.instrHead}>क्या करना है:</Text>
                         <Text style={styles.instrText}>
-                            • स्क्रीन पर एक अक्षर दिखेगा — धीरे-धीरे फीका होता जाएगा{'\n'}
-                            (A letter appears — it gets fainter each round){'\n\n'}
-                            • नीचे बटन में उसी अक्षर को दबाएं{'\n'}
-                            (Tap the matching letter below){'\n\n'}
-                            • अंदाज़ा लगाएं — यह ठीक है!{'\n'}
-                            (Guessing is okay!)
+                            {'• स्क्रीन पर एक अक्षर दिखेगा — धीरे-धीरे फीका होता जाएगा\n(A letter appears — it gets fainter each round)\n\n'}
+                            {'• नीचे बटन में उसी अक्षर को दबाएं\n(Tap the matching letter below)\n\n'}
+                            {'• अंदाज़ा लगाएं — यह ठीक है!\n(Guessing is okay!)'}
                         </Text>
                     </View>
                     <View style={[styles.card, { backgroundColor: '#FFF3CD' }]}>
@@ -188,12 +223,24 @@ export default function ContrastTestScreen({ navigation }) {
     // Test
     return (
         <SafeAreaView style={styles.safe}>
+            {/* Progress Bar */}
+            <View style={styles.topRow}>
+                <View style={styles.progressBar}>
+                    <View style={[styles.progressFill, { width: `${(timeLeft / 40) * 100}%` }]} />
+                </View>
+                <View style={styles.timerBox}>
+                    <Text style={[styles.timerTxt, timeLeft < 10 && { color: '#EF4444' }]}>
+                        ⏱️ {timeLeft}s
+                    </Text>
+                </View>
+            </View>
+
             {/* Header */}
             <View style={styles.header}>
                 <View style={styles.badge}>
                     <Text style={styles.badgeText}>{PHASES[phaseIndex].split('\n')[0]}</Text>
                 </View>
-                <Text style={styles.headerInfo}>LogCS: <Text style={styles.bold}>{currentLogCS.toFixed(2)}</Text>  {lettersInLevel + 1}/{LETTERS_PER_LEVEL}</Text>
+                <Text style={styles.headerInfo}>LogCS: <Text style={styles.bold}>{currentLogCS.toFixed(2)}</Text></Text>
             </View>
 
             {/* Letter Canvas */}
@@ -237,6 +284,11 @@ const styles = StyleSheet.create({
     badge: { backgroundColor: '#3B82F6', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6 },
     badgeText: { color: '#fff', fontWeight: '700', fontSize: 13 },
     headerInfo: { color: '#64748B', fontSize: 14 },
+    topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginTop: 12 },
+    progressBar: { height: 6, backgroundColor: '#E2E8F0', flex: 1, marginRight: 12, borderRadius: 3, overflow: 'hidden' },
+    progressFill: { height: '100%', backgroundColor: '#3B82F6', borderRadius: 3 },
+    timerBox: { backgroundColor: '#fff', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: '#E2E8F0' },
+    timerTxt: { fontSize: 13, fontWeight: '700', color: '#64748B' },
     bold: { fontWeight: '700', color: '#1E293B' },
     canvasWrap: { alignSelf: 'center', borderRadius: 12, overflow: 'hidden', borderWidth: 1.5, borderColor: '#E2E8F0', elevation: 2 },
     hint: { textAlign: 'center', color: '#94A3B8', fontSize: 13, marginTop: 12, marginBottom: 8, paddingHorizontal: 20 },

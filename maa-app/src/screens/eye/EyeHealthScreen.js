@@ -20,6 +20,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 
 import { Colors, Dimensions } from '../../constants';
 import { useLanguage } from '../../context/LanguageContext';
+import { useUser } from '../../context/UserContext';
 import { predictEyeRisk, checkMLServiceHealth } from '../../services/RiskRadarService';
 import { saveEyeAssessment } from '../../services/database/DatabaseService';
 
@@ -59,15 +60,16 @@ export default function EyeHealthScreen() {
     const { language } = useLanguage();
     const navigation = useNavigation();
     const route = useRoute();
+    const { eyeScores, updateEyeScore, resetEyeScores } = useUser();
     const t = key => L[key]?.[language] ?? L[key]?.en ?? key;
 
-    // Form state
-    const [age, setAge] = useState('');
-    const [familyHistory, setFamilyHistory] = useState(false);
-    const [logMAR, setLogMAR] = useState('');
-    const [logCS, setLogCS] = useState('');
-    const [vfi, setVfi] = useState('');
-    const [amsler, setAmsler] = useState(false);
+    // Form states — seeded from context so they survive navigation
+    const [age, setAge] = useState(eyeScores.age || '');
+    const [familyHistory, setFamilyHistory] = useState(eyeScores.familyHistory || false);
+    const [logMAR, setLogMAR] = useState(eyeScores.logMAR || '');
+    const [logCS, setLogCS] = useState(eyeScores.logCS || '');
+    const [vfi, setVfi] = useState(eyeScores.vfi || '');
+    const [amsler, setAmsler] = useState(eyeScores.amsler || false);
 
     // Result state
     const [loading, setLoading] = useState(false);
@@ -77,20 +79,27 @@ export default function EyeHealthScreen() {
     // Handle incoming results from test screens
     useEffect(() => {
         if (route.params?.acuityResult) {
-            setLogMAR(route.params.acuityResult.logMAR.toString());
-            // Clear param to avoid re-triggering
+            const val = route.params.acuityResult.logMAR.toString();
+            setLogMAR(val);
+            updateEyeScore('logMAR', val);
             navigation.setParams({ acuityResult: undefined });
         }
         if (route.params?.contrastResult) {
-            setLogCS(route.params.contrastResult.logCS.toString());
+            const val = route.params.contrastResult.logCS.toString();
+            setLogCS(val);
+            updateEyeScore('logCS', val);
             navigation.setParams({ contrastResult: undefined });
         }
         if (route.params?.amslerResult) {
-            setAmsler(route.params.amslerResult.hasDistortion);
+            const val = route.params.amslerResult.hasDistortion;
+            setAmsler(val);
+            updateEyeScore('amsler', val);
             navigation.setParams({ amslerResult: undefined });
         }
         if (route.params?.peripheralResult) {
-            setVfi(route.params.peripheralResult.vfi.toString());
+            const val = route.params.peripheralResult.vfi.toString();
+            setVfi(val);
+            updateEyeScore('vfi', val);
             navigation.setParams({ peripheralResult: undefined });
         }
     }, [route.params]);
@@ -104,7 +113,8 @@ export default function EyeHealthScreen() {
         setAmsler(false);
         setResult(null);
         setOffline(false);
-    }, []);
+        resetEyeScores();
+    }, [resetEyeScores]);
 
     const handleSubmit = useCallback(async () => {
         if (!age || !logMAR || !logCS || !vfi) {
@@ -229,7 +239,7 @@ export default function EyeHealthScreen() {
                     <TextInput
                         style={styles.input}
                         value={age}
-                        onChangeText={setAge}
+                        onChangeText={(v) => { setAge(v); updateEyeScore('age', v); }}
                         keyboardType="numeric"
                         placeholder="e.g. 45"
                         placeholderTextColor={Colors.textLight}
@@ -250,7 +260,7 @@ export default function EyeHealthScreen() {
                     <TextInput
                         style={[styles.input, logMAR ? styles.inputFilled : null]}
                         value={logMAR}
-                        onChangeText={setLogMAR}
+                        onChangeText={(v) => { setLogMAR(v); updateEyeScore('logMAR', v); }}
                         keyboardType="numeric"
                         placeholder="e.g. 0.1  (0=perfect, 2=severe)"
                         placeholderTextColor={Colors.textLight}
@@ -270,7 +280,7 @@ export default function EyeHealthScreen() {
                     <TextInput
                         style={[styles.input, logCS ? styles.inputFilled : null]}
                         value={logCS}
-                        onChangeText={setLogCS}
+                        onChangeText={(v) => { setLogCS(v); updateEyeScore('logCS', v); }}
                         keyboardType="numeric"
                         placeholder="e.g. 1.7  (2.2=excellent, 0=no contrast)"
                         placeholderTextColor={Colors.textLight}
@@ -290,7 +300,7 @@ export default function EyeHealthScreen() {
                     <TextInput
                         style={[styles.input, vfi ? styles.inputFilled : null]}
                         value={vfi}
-                        onChangeText={setVfi}
+                        onChangeText={(v) => { setVfi(v); updateEyeScore('vfi', v); }}
                         keyboardType="numeric"
                         placeholder="e.g. 98  (100=normal, 0=no field)"
                         placeholderTextColor={Colors.textLight}
@@ -304,7 +314,7 @@ export default function EyeHealthScreen() {
                             <Text style={styles.toggleLabel}>{familyHistory ? t('yes') : t('no')}</Text>
                             <Switch
                                 value={familyHistory}
-                                onValueChange={setFamilyHistory}
+                                onValueChange={(v) => { setFamilyHistory(v); updateEyeScore('familyHistory', v); }}
                                 trackColor={{ false: Colors.border, true: Colors.primaryLight }}
                                 thumbColor={familyHistory ? Colors.primary : Colors.white}
                             />
@@ -326,7 +336,7 @@ export default function EyeHealthScreen() {
                             <Text style={styles.toggleLabel}>{amsler ? t('yes') : t('no')}</Text>
                             <Switch
                                 value={amsler}
-                                onValueChange={setAmsler}
+                                onValueChange={(v) => { setAmsler(v); updateEyeScore('amsler', v); }}
                                 trackColor={{ false: Colors.border, true: Colors.dangerLight }}
                                 thumbColor={amsler ? Colors.danger : Colors.white}
                             />

@@ -7,6 +7,7 @@
 import React from 'react';
 import { TouchableOpacity, Text, StyleSheet, View } from 'react-native';
 import { Colors, Dimensions } from '../../constants';
+import { useLanguage } from '../../context/LanguageContext';
 
 /**
  * @param {Object} props
@@ -19,6 +20,9 @@ import { Colors, Dimensions } from '../../constants';
  * @param {boolean} props.disabled - Disable state
  */
 export default function BigButton({ emoji, labelHi, labelEn, color = Colors.primary, onPress, fullWidth = false, disabled = false }) {
+    const { isHindi, isBilingual } = useLanguage();
+    const primaryLabel = (isHindi || isBilingual) ? labelHi : labelEn;
+    const secondaryLabel = isBilingual ? labelEn : null;
     return (
         <TouchableOpacity
             style={[
@@ -36,8 +40,8 @@ export default function BigButton({ emoji, labelHi, labelEn, color = Colors.prim
         >
             <Text style={styles.emoji}>{emoji}</Text>
             <View style={styles.labels}>
-                <Text style={styles.labelHi}>{labelHi}</Text>
-                <Text style={styles.labelEn}>{labelEn}</Text>
+                <Text style={styles.labelHi}>{primaryLabel}</Text>
+                {secondaryLabel && <Text style={styles.labelEn}>{secondaryLabel}</Text>}
             </View>
         </TouchableOpacity>
     );

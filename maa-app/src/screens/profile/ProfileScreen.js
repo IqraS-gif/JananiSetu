@@ -19,7 +19,8 @@ import {
 } from 'react-native';
 
 import { Colors, Dimensions } from '../../constants';
-import { useLanguage } from '../../context/LanguageContext';
+import { useUser } from '../../context/UserContext';
+import { useT } from '../../i18n/useT';
 import { getUserProfile, saveUserProfile } from '../../services/database/DatabaseService';
 
 // ── Clinical Helpers ──────────────────────────────────────────────
@@ -45,9 +46,51 @@ function dueDateFromLMP(lmpString) {
 
 // ── Main Component ─────────────────────────────────────────────────
 
+const Field = ({ label, value, field, keyboardType = 'default', placeholder, onChange, setForm }) => (
+    <View style={styles.fieldWrap}>
+        <Text style={styles.fieldLabel}>{label}</Text>
+        <TextInput
+            style={styles.input}
+            value={value}
+            placeholder={placeholder || label}
+            placeholderTextColor={Colors.textLight}
+            keyboardType={keyboardType}
+            onChangeText={onChange || ((text) => setForm((prev) => ({ ...prev, [field]: text })))}
+            cursorColor={Colors.primary}
+            textAlignVertical="center"
+        />
+    </View>
+);
+
+const OptionGroup = ({ label, options, value, field, setForm }) => (
+    <View style={styles.fieldWrap}>
+        <Text style={styles.fieldLabel}>{label}</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {options.map((opt) => (
+                <TouchableOpacity
+                    key={String(opt.val)}
+                    style={[
+                        styles.langBtn,
+                        value === opt.val && styles.langBtnActive,
+                        { marginBottom: 4 }
+                    ]}
+                    onPress={() => setForm(prev => ({ ...prev, [field]: opt.val }))}
+                >
+                    <Text style={[
+                        styles.langBtnText,
+                        value === opt.val && styles.langBtnTextActive
+                    ]}>
+                        {opt.label}
+                    </Text>
+                </TouchableOpacity>
+            ))}
+        </View>
+    </View>
+);
+
 export default function ProfileScreen() {
-    const { language, setLanguage } = useLanguage();
-    const hi = language === 'hi';
+    const { t, language, setLanguage } = useT();
+    const { logout } = useUser();
 
     const [form, setForm] = useState({
         name: '',
@@ -60,6 +103,15 @@ export default function ProfileScreen() {
         current_weight_kg: '',
         asha_contact: '',
         emergency_contact: '',
+        husband_contact: '',
+        phc_contact: '',
+        ration_category: '',
+        nfsa_status: false,
+        state: '',
+        jdy_bank: false,
+        aadhaar_linked: false,
+        pmmvy_claimed: '',
+        jsy_registered: false,
     });
     const [saving, setSaving] = useState(false);
 
@@ -79,6 +131,15 @@ export default function ProfileScreen() {
                         current_weight_kg: profile.current_weight_kg?.toString() || '',
                         asha_contact: profile.asha_contact || '',
                         emergency_contact: profile.emergency_contact || '',
+                        husband_contact: profile.husband_contact || '',
+                        phc_contact: profile.phc_contact || '',
+                        ration_category: profile.ration_category || '',
+                        nfsa_status: !!profile.nfsa_status,
+                        state: profile.state || '',
+                        jdy_bank: !!profile.jdy_bank,
+                        aadhaar_linked: !!profile.aadhaar_linked,
+                        pmmvy_claimed: profile.pmmvy_claimed || '',
+                        jsy_registered: !!profile.jsy_registered,
                     });
                 }
             } catch (e) {
@@ -102,8 +163,8 @@ export default function ProfileScreen() {
     const handleSave = async () => {
         if (!form.name.trim()) {
             Alert.alert(
-                hi ? '⚠️ ज़रूरी है' : '⚠️ Required',
-                hi ? 'कृपया नाम डालें।' : 'Please enter your name.'
+                t('req_title'),
+                t('req_name')
             );
             return;
         }
@@ -120,48 +181,41 @@ export default function ProfileScreen() {
                 current_weight_kg: parseFloat(form.current_weight_kg) || null,
                 asha_contact: form.asha_contact || null,
                 emergency_contact: form.emergency_contact || null,
+                husband_contact: form.husband_contact || null,
+                phc_contact: form.phc_contact || null,
+                ration_category: form.ration_category,
+                nfsa_status: form.nfsa_status,
+                state: form.state,
+                jdy_bank: form.jdy_bank,
+                aadhaar_linked: form.aadhaar_linked,
+                pmmvy_claimed: form.pmmvy_claimed,
+                jsy_registered: form.jsy_registered,
                 language,
             });
             Alert.alert(
-                hi ? '✅ सेव हो गया' : '✅ Saved',
-                hi ? 'प्रोफ़ाइल सेव हो गई!' : 'Profile saved successfully!'
+                t('saved_title'),
+                t('profile_saved')
             );
         } catch (e) {
             console.error('[ProfileScreen] Save error:', e);
-            Alert.alert(hi ? '❌ गलती' : '❌ Error', hi ? 'कुछ गलत हुआ।' : 'Something went wrong.');
+            Alert.alert(t('error_title'), t('something_wrong'));
         } finally {
             setSaving(false);
         }
     };
 
-    const Field = ({ labelHi, labelEn, value, field, keyboardType = 'default', placeholder, onChange }) => (
-        <View style={styles.fieldWrap}>
-            <Text style={styles.fieldLabel}>{hi ? labelHi : labelEn}</Text>
-            <TextInput
-                style={styles.input}
-                value={value}
-                placeholder={placeholder || (hi ? labelHi : labelEn)}
-                placeholderTextColor={Colors.textLight}
-                keyboardType={keyboardType}
-                onChangeText={onChange || ((text) => setForm((prev) => ({ ...prev, [field]: text })))}
-                cursorColor={Colors.primary}
-                textAlignVertical="center"
-            />
-        </View>
-    );
-
     return (
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
             <Text style={styles.pageTitle}>
-                {hi ? '👤 प्रोफ़ाइल' : '👤 Profile'}
+                {t('profile')}
             </Text>
 
             {/* ── Language Toggle ── */}
             <View style={styles.languageRow}>
                 <Text style={styles.languageLabel}>
-                    {hi ? 'भाषा / Language' : 'Language / भाषा'}
+                    {t('lang_row')}
                 </Text>
-                <View style={styles.languageOptions}>
+                <View style={[styles.languageOptions, {flexWrap: 'wrap', justifyContent: 'flex-end', flex: 1, marginLeft: 8}]}>
                     <TouchableOpacity
                         style={[styles.langBtn, language === 'hi' && styles.langBtnActive]}
                         onPress={() => setLanguage('hi')}
@@ -178,34 +232,42 @@ export default function ProfileScreen() {
                             English
                         </Text>
                     </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.langBtn, language === 'bilingual' && styles.langBtnActive]}
+                        onPress={() => setLanguage('bilingual')}
+                    >
+                        <Text style={[styles.langBtnText, language === 'bilingual' && styles.langBtnTextActive]}>
+                            Bilingual
+                        </Text>
+                    </TouchableOpacity>
                 </View>
             </View>
 
             {/* ── Personal Info ── */}
             <Text style={styles.sectionTitle}>
-                {hi ? '👩 व्यक्तिगत जानकारी' : '👩 Personal Info'}
+                {t('personal_info')}
             </Text>
-            <Field
-                labelHi="नाम" labelEn="Name"
+            <Field setForm={setForm}
+                label={t('label_name')}
                 value={form.name} field="name"
-                placeholder={hi ? 'आपका नाम' : 'Your name'}
+                placeholder={t('ph_name')}
             />
-            <Field
-                labelHi="उम्र" labelEn="Age"
+            <Field setForm={setForm}
+                label={t('label_age')}
                 value={form.age} field="age" keyboardType="numeric"
             />
-            <Field
-                labelHi="ऊँचाई (cm)" labelEn="Height (cm)"
+            <Field setForm={setForm}
+                label={t('label_height')}
                 value={form.height_cm} field="height_cm" keyboardType="numeric"
             />
 
             {/* ── Pregnancy Details ── */}
             <Text style={styles.sectionTitle}>
-                {hi ? '🤰 गर्भावस्था विवरण' : '🤰 Pregnancy Details'}
+                {t('preg_details')}
             </Text>
 
-            <Field
-                labelHi="आखिरी माहवारी (LMP)" labelEn="Last Period Date (LMP)"
+            <Field setForm={setForm}
+                label={t('label_lmp')}
                 value={form.lmp_date}
                 placeholder="YYYY-MM-DD"
                 onChange={handleLMPChange}
@@ -215,41 +277,104 @@ export default function ProfileScreen() {
             {form.pregnancy_week ? (
                 <View style={styles.derivedRow}>
                     <Text style={styles.derivedLabel}>
-                        {hi ? '📅 गर्भावस्था सप्ताह (auto):' : '📅 Pregnancy Week (auto):'}
+                        {t('auto_preg_week')}
                     </Text>
                     <Text style={styles.derivedValue}>
-                        {hi ? `सप्ताह ${form.pregnancy_week}` : `Week ${form.pregnancy_week}`}
+                        {t('auto_preg_week_val', { week: form.pregnancy_week })}
                     </Text>
                 </View>
             ) : null}
             {form.due_date ? (
                 <View style={styles.derivedRow}>
                     <Text style={styles.derivedLabel}>
-                        {hi ? '🗓️ प्रसव की तारीख (auto):' : '🗓️ Due Date (auto):'}
+                        {t('auto_due_date')}
                     </Text>
                     <Text style={styles.derivedValue}>{form.due_date}</Text>
                 </View>
             ) : null}
 
-            <Field
-                labelHi="शुरुआती वज़न (kg)" labelEn="Starting Weight (kg)"
+            <Field setForm={setForm}
+                label={t('label_start_weight')}
                 value={form.start_weight_kg} field="start_weight_kg" keyboardType="numeric"
             />
-            <Field
-                labelHi="मौजूदा वज़न (kg)" labelEn="Current Weight (kg)"
+            <Field setForm={setForm}
+                label={t('label_current_weight')}
                 value={form.current_weight_kg} field="current_weight_kg" keyboardType="numeric"
+            />
+
+            {/* ── Household & Entitlements ── */}
+            <Text style={styles.sectionTitle}>
+                {t('entitlements')}
+            </Text>
+
+            <OptionGroup setForm={setForm} value={form.ration_category} field="ration_category"
+                label={t('label_ration')}
+                options={[
+                    { val: 'APL', label: t('opt_apl') },
+                    { val: 'BPL', label: t('opt_bpl') },
+                    { val: 'AAY', label: t('opt_aay') },
+                    { val: 'None', label: t('opt_none') }
+                ]}
+            />
+
+            <OptionGroup setForm={setForm} value={form.nfsa_status} field="nfsa_status"
+                label={t('label_nfsa')}
+                options={[{ val: true, label: t('opt_yes') }, { val: false, label: t('opt_no') }]}
+            />
+
+            <OptionGroup setForm={setForm} value={form.state} field="state"
+                label={t('label_state')}
+                options={[
+                    { val: 'MP', label: t('opt_mp') },
+                    { val: 'UP', label: t('opt_up') },
+                    { val: 'Bihar', label: t('opt_bihar') },
+                    { val: 'Other', label: t('opt_other') }
+                ]}
+            />
+
+            <OptionGroup setForm={setForm} value={form.aadhaar_linked} field="aadhaar_linked"
+                label={t('label_aadhaar')}
+                options={[{ val: true, label: t('opt_yes') }, { val: false, label: t('opt_no') }]}
+            />
+
+            <OptionGroup setForm={setForm} value={form.jdy_bank} field="jdy_bank"
+                label={t('label_jdy')}
+                options={[{ val: true, label: t('opt_yes') }, { val: false, label: t('opt_no') }]}
+            />
+
+            <OptionGroup setForm={setForm} value={form.pmmvy_claimed} field="pmmvy_claimed"
+                label={t('label_pmmvy')}
+                options={[
+                    { val: 'None', label: t('opt_not_rec') },
+                    { val: 'Installment 1', label: t('opt_inst_1') },
+                    { val: '1+2', label: t('opt_inst_1_2') },
+                    { val: 'All 3', label: t('opt_inst_all') }
+                ]}
+            />
+
+            <OptionGroup setForm={setForm} value={form.jsy_registered} field="jsy_registered"
+                label={t('label_jsy')}
+                options={[{ val: true, label: t('opt_yes') }, { val: false, label: t('opt_no') }]}
             />
 
             {/* ── Emergency Contacts ── */}
             <Text style={styles.sectionTitle}>
-                {hi ? '📞 आपातकालीन संपर्क' : '📞 Emergency Contacts'}
+                {t('emergency_contacts')}
             </Text>
-            <Field
-                labelHi="ASHA कार्यकर्ता नंबर" labelEn="ASHA Worker Phone"
+            <Field setForm={setForm}
+                label={t('label_husband_num')}
+                value={form.husband_contact} field="husband_contact" keyboardType="phone-pad"
+            />
+            <Field setForm={setForm}
+                label={t('label_phc_num')}
+                value={form.phc_contact} field="phc_contact" keyboardType="phone-pad"
+            />
+            <Field setForm={setForm}
+                label={t('label_asha_num')}
                 value={form.asha_contact} field="asha_contact" keyboardType="phone-pad"
             />
-            <Field
-                labelHi="आपातकालीन संपर्क" labelEn="Family Emergency Contact"
+            <Field setForm={setForm}
+                label={t('label_emergency_num')}
                 value={form.emergency_contact} field="emergency_contact" keyboardType="phone-pad"
             />
 
@@ -260,9 +385,26 @@ export default function ProfileScreen() {
                 disabled={saving}
             >
                 <Text style={styles.saveBtnText}>
-                    {saving
-                        ? (hi ? 'सेव हो रहा है…' : 'Saving…')
-                        : (hi ? '✅ सेव करें' : '✅ Save Profile')}
+                    {saving ? t('saving') : t('save_btn')}
+                </Text>
+            </TouchableOpacity>
+
+            {/* ── Logout ── */}
+            <TouchableOpacity
+                style={styles.logoutBtn}
+                onPress={() => {
+                    Alert.alert(
+                        t('logout'),
+                        t('logout_msg'),
+                        [
+                            { text: t('no'), style: 'cancel' },
+                            { text: t('yes'), onPress: logout, style: 'destructive' }
+                        ]
+                    );
+                }}
+            >
+                <Text style={styles.logoutBtnText}>
+                    {t('btn_logout')}
                 </Text>
             </TouchableOpacity>
 
@@ -347,4 +489,19 @@ const styles = StyleSheet.create({
     },
     saveBtnDisabled: { opacity: 0.6 },
     saveBtnText: { color: Colors.white, fontSize: 18, fontWeight: '800' },
+
+    // Logout button
+    logoutBtn: {
+        marginTop: 24,
+        padding: 18,
+        borderRadius: Dimensions.borderRadius,
+        borderWidth: 2,
+        borderColor: Colors.danger,
+        alignItems: 'center',
+    },
+    logoutBtnText: {
+        color: Colors.danger,
+        fontSize: 18,
+        fontWeight: '800',
+    },
 });

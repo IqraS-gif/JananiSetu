@@ -7,6 +7,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Colors, Dimensions } from '../../constants';
+import { useLanguage } from '../../context/LanguageContext';
 
 /**
  * @param {Object} props
@@ -19,7 +20,10 @@ import { Colors, Dimensions } from '../../constants';
  * @param {Function} props.onPress - Tap handler
  */
 export default function StatusCard({ emoji, labelHi, labelEn, value, percentage = 0, status = 'good', onPress }) {
+    const { isHindi, isBilingual } = useLanguage();
     const statusColor = status === 'good' ? Colors.success : status === 'medium' ? Colors.warning : Colors.danger;
+    const primaryLabel = (isHindi || isBilingual) ? labelHi : labelEn;
+    const secondaryLabel = isBilingual ? labelEn : null;
 
     return (
         <TouchableOpacity
@@ -30,8 +34,8 @@ export default function StatusCard({ emoji, labelHi, labelEn, value, percentage 
             accessibilityLabel={`${labelEn}: ${value}`}
         >
             <Text style={styles.emoji}>{emoji}</Text>
-            <Text style={styles.labelHi}>{labelHi}</Text>
-            <Text style={styles.labelEn}>{labelEn}</Text>
+            <Text style={styles.labelHi}>{primaryLabel}</Text>
+            {secondaryLabel && <Text style={styles.labelEn}>{secondaryLabel}</Text>}
             <Text style={[styles.value, { color: statusColor }]}>{value}</Text>
             {/* Progress bar */}
             <View style={styles.progressBg}>

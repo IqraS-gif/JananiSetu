@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import Svg, { G, Rect, Circle } from 'react-native-svg';
 import { useVoiceDirection } from '../../../hooks/useVoiceDirection';
+import { verifyDirection } from '../../../services/ai/GroqService';
 import { Colors } from '../../../constants';
 
 const { width: SW } = Dimensions.get('window');
@@ -20,18 +21,33 @@ const CANVAS_SIZE = Math.min(SW - 40, 360);
 const TEST_DISTANCE_MM = 400; // phone at arm's length
 const PIXELS_PER_MM = SW / 130;
 
-const SIZE_STEPS = [88, 70, 55, 44, 35, 28, 22, 17, 14, 11, 8, 5];
-const PHASES = ['दाईं आँख\nRight Eye', 'बाईं आँख\nLeft Eye', 'दोनों आँखें\nBoth Eyes'];
+const SIZE_STEPS = [
+    88, 80, 72, 65, 58, 52, 46, 41, 37, 33, 29, 26, 23, 20, 18, 16, 14, 12, 11, 10, 9, 8, 7, 6, 5
+];
+const PHASES = ['बायीं आँख\nLeft Eye', 'दाईं आँख\nRight Eye'];
 const ORIENTATIONS = ['up', 'down', 'left', 'right'];
 
 function arcMinToPixels(arcMin) {
     const rad = (arcMin / 60) * (Math.PI / 180);
     const mm = Math.tan(rad) * TEST_DISTANCE_MM;
-    return Math.max(mm * PIXELS_PER_MM, 22);
+    // Lowered floor to 0.5px so it NEVER feels "stuck" until the very end.
+    return Math.max(mm * PIXELS_PER_MM, 0.5);
 }
 function arcMinToSnellen(arcMin) {
     const mar = arcMin / 5;
-    return `20/${Math.round(20 * mar)}`;
+    const den = Math.round(20 * mar);
+    // Standard Snellen rounding for clinical clarity
+    if (den >= 190 && den <= 210) return '20/200';
+    if (den >= 140 && den <= 160) return '20/150';
+    if (den >= 90 && den <= 110) return '20/100';
+    if (den >= 65 && den <= 85) return '20/70';
+    if (den >= 45 && den <= 55) return '20/50';
+    if (den >= 35 && den <= 45) return '20/40';
+    if (den >= 28 && den <= 32) return '20/30';
+    if (den >= 23 && den <= 27) return '20/25';
+    if (den >= 18 && den <= 22) return '20/20';
+    if (den >= 13 && den <= 17) return '20/15';
+    return `20/${den}`;
 }
 function arcMinToLogMAR(arcMin) {
     return parseFloat(Math.log10(arcMin / 5).toFixed(2));
@@ -46,7 +62,7 @@ function TumblingE({ sizePx, orientation }) {
 
     return (
         <Svg width={CANVAS_SIZE} height={CANVAS_SIZE} viewBox={`0 0 ${CANVAS_SIZE} ${CANVAS_SIZE}`}>
-            <Rect width={CANVAS_SIZE} height={CANVAS_SIZE} fill="#FFFFFF" />
+            <Rect width={CANVAS_SIZE} height={CANVAS_SIZE} fill="transparent" />
 
             {/* Rotation Group: Moves to center and rotates */}
             <G transform={`translate(${center} ${center}) rotate(${angleDeg})`}>
@@ -80,7 +96,11 @@ export default function AcuityTestScreen({ navigation }) {
     const [questionCount, setQuestionCount] = useState(0);
     const [locked, setLocked] = useState(false);
     const [listening, setListening] = useState(false);
+    const [voiceEnabled, setVoiceEnabled] = useState(true);
+    const [timeLeft, setTimeLeft] = useState(30);
     const micPulse = useRef(new Animated.Value(1)).current;
+    const timerRef = useRef(null);
+
 
     const nextOrientation = useCallback((prev) => {
         let o;
@@ -88,13 +108,33 @@ export default function AcuityTestScreen({ navigation }) {
         return o;
     }, []);
 
+    // Countdown Timer logic: pure decrement
+    useEffect(() => {
+        if (phase === 'test' && timeLeft > 0) {
+            timerRef.current = setInterval(() => {
+                setTimeLeft(prev => prev - 1);
+            }, 1000);
+        } else {
+            clearInterval(timerRef.current);
+        }
+        return () => clearInterval(timerRef.current);
+    }, [phase, phaseIndex]);
+
+    // Finish Condition: Monitor timeLeft reaching 0
+    useEffect(() => {
+        if (phase === 'test' && timeLeft === 0) {
+            if (timerRef.current) clearInterval(timerRef.current);
+            finishPhase(results, stepIndex);
+        }
+    }, [timeLeft, phase]);
+
     // Mic pulse animation
     useEffect(() => {
         if (listening) {
             Animated.loop(
                 Animated.sequence([
-                    Animated.timing(micPulse, { toValue: 1.25, duration: 500, useNativeDriver: true }),
-                    Animated.timing(micPulse, { toValue: 1.0, duration: 500, useNativeDriver: true }),
+                    Animated.timing(micPulse, { toValue: 1.2, duration: 400, useNativeDriver: true }),
+                    Animated.timing(micPulse, { toValue: 1.0, duration: 400, useNativeDriver: true }),
                 ])
             ).start();
         } else {
@@ -103,57 +143,76 @@ export default function AcuityTestScreen({ navigation }) {
         }
     }, [listening]);
 
-    const handleAnswer = useCallback((dir) => {
-        if (locked) return;
+    const [transcript, setTranscript] = useState('');
+
+    const handleAnswer = useCallback(async (dir, rawTranscript) => {
+        console.log(`[AcuityTest] Answer: ${dir}, Raw: "${rawTranscript}"`);
+        if (rawTranscript) setTranscript(rawTranscript);
+
+        if (locked || phase !== 'test') return;
+
+        let isMatch = false;
+
+        // 1. Check if it's an LLM Verification request (Voice)
+        if (rawTranscript && !dir) {
+            setLocked(true);
+            setListening(false);
+            console.log(`[AcuityTest] Validating via LLM: "${rawTranscript}" vs Target: "${orientation}"`);
+            const verification = await verifyDirection(orientation, rawTranscript);
+            isMatch = (verification === 'right');
+        } else if (dir) {
+            // Button or direct hook match
+            isMatch = (dir === orientation);
+        } else {
+            return; // Nothing to do
+        }
+
+        // 2. Reflect feedback (Green/Red only)
         setLocked(true);
         setListening(false);
+        setFeedback(isMatch ? 'correct' : 'wrong');
 
-        const isCorrect = dir === orientation;
-        setFeedback(isCorrect ? 'correct' : 'wrong');
+        let newStep = stepIndex;
+        let newWrong = isMatch ? 0 : incorrectStreak + 1;
+        let newReversals = reversals;
+        let newLastDir = lastDir;
 
-        setResults(prev => {
-            const newResults = [...prev, { size: SIZE_STEPS[stepIndex], correct: isCorrect }];
-
-            let newStep = stepIndex;
-            let newCorrect = correctStreak + (isCorrect ? 1 : 0);
-            let newWrong = isCorrect ? 0 : incorrectStreak + 1;
-            let newReversals = reversals;
-            let newLastDir = lastDir;
-
-            if (isCorrect && newCorrect >= 3) {
-                if (lastDir === 'larger') newReversals++;
-                newLastDir = 'smaller';
-                newStep = Math.min(SIZE_STEPS.length - 1, stepIndex + 1);
-                newCorrect = 0;
-            } else if (!isCorrect && newWrong >= 2) {
+        if (isMatch) {
+            if (lastDir === 'larger') newReversals++;
+            newLastDir = 'smaller';
+            // Move 2 steps for large E (stepIndex < 10) for visibility, then 1 step
+            const stride = stepIndex < 10 ? 2 : 1;
+            newStep = Math.min(SIZE_STEPS.length - 1, stepIndex + stride);
+        } else {
+            if (newWrong >= 1) { // Faster moving if wrong too
                 if (lastDir === 'smaller') newReversals++;
                 newLastDir = 'larger';
-                newStep = Math.max(0, stepIndex - 1);
+                newStep = Math.max(0, stepIndex - 2);
                 newWrong = 0;
             }
+        }
 
-            const done = newReversals >= 8 || newResults.length >= 25;
-            setTimeout(() => {
-                if (done) {
-                    finishPhase(newResults, newStep);
-                } else {
-                    setStepIndex(newStep);
-                    setCorrectStreak(newCorrect);
-                    setIncorrectStreak(newWrong);
-                    setReversals(newReversals);
-                    setLastDir(newLastDir);
-                    setQuestionCount(c => c + 1);
-                    setOrientation(prev2 => nextOrientation(prev2));
-                    setFeedback(null);
-                    setLocked(false);
-                    // Auto-start next mic session
-                    startListeningAfterDelay();
-                }
-            }, 700);
+        const newResults = [...results, { size: SIZE_STEPS[stepIndex], correct: isMatch }];
+        const isDone = newReversals >= 10 || newResults.length >= 35;
 
-            return newResults;
-        });
-    }, [locked, orientation, stepIndex, correctStreak, incorrectStreak, reversals, lastDir, nextOrientation]);
+        setTimeout(() => {
+            setResults(newResults);
+            if (isDone) {
+                finishPhase(newResults, newStep);
+            } else {
+                setStepIndex(newStep);
+                setIncorrectStreak(newWrong);
+                setReversals(newReversals);
+                setLastDir(newLastDir);
+                setQuestionCount(c => c + 1);
+                setOrientation(nextOrientation(orientation));
+                setFeedback(null);
+                setTranscript(''); // Clear transcript for next Q
+                setLocked(false);
+                startListeningAfterDelay();
+            }
+        }, 800);
+    }, [locked, orientation, stepIndex, incorrectStreak, reversals, lastDir, results, phase, finishPhase, nextOrientation, startListeningAfterDelay]);
 
     const { startListening, stopListening } = useVoiceDirection({
         onDirection: handleAnswer,
@@ -161,10 +220,11 @@ export default function AcuityTestScreen({ navigation }) {
     });
 
     const startListeningAfterDelay = useCallback(() => {
+        if (!voiceEnabled) return;
         setTimeout(async () => {
             setListening(true);
             await startListening();
-        }, 400);
+        }, 500);
     }, [startListening]);
 
     const finishPhase = useCallback((phaseResults, lastStepIdx) => {
@@ -190,9 +250,14 @@ export default function AcuityTestScreen({ navigation }) {
             setFeedback(null);
             setPhase('intermission');
         } else {
-            const binocular = updated[PHASES[2]] || updated[PHASES[1]] || result;
+            // Updated to prefer the second eye result (usually दाईं आँख / Right Eye in our new PHASES)
+            // or the best of the two.
+            const resultRight = updated[PHASES[1]];
+            const resultLeft = updated[PHASES[0]];
+            const finalResult = resultRight || resultLeft || result;
+
             navigation.navigate('EyeHealth', {
-                acuityResult: { logMAR: binocular.logMAR, snellen: binocular.snellen, eyeData: updated }
+                acuityResult: { logMAR: finalResult.logMAR, snellen: finalResult.snellen, eyeData: updated }
             });
             setPhase('done');
         }
@@ -202,6 +267,7 @@ export default function AcuityTestScreen({ navigation }) {
         setStepIndex(0); setCorrectStreak(0); setIncorrectStreak(0);
         setReversals(0); setLastDir(null); setResults([]);
         setQuestionCount(0); setLocked(false); setFeedback(null);
+        setTimeLeft(30); // Reset timer to 30s
         const o = nextOrientation(null);
         setOrientation(o);
         setPhase('test');
@@ -278,39 +344,58 @@ export default function AcuityTestScreen({ navigation }) {
 
     return (
         <SafeAreaView style={s.safe}>
-            {/* Top bar */}
             <View style={s.topBar}>
                 <View style={s.badge}>
                     <Text style={s.badgeTxt}>{PHASES[phaseIndex].split('\n')[0]}</Text>
                 </View>
+                <View style={s.timerBox}>
+                    <Text style={[s.timerTxt, timeLeft < 10 && { color: '#EF4444' }]}>
+                        ⏱️ {timeLeft}s
+                    </Text>
+                </View>
+                <TouchableOpacity
+                    style={[s.voiceToggle, !voiceEnabled && s.voiceOff]}
+                    onPress={() => {
+                        const next = !voiceEnabled;
+                        setVoiceEnabled(next);
+                        if (!next) {
+                            setListening(false);
+                            stopListening();
+                        } else {
+                            startListeningAfterDelay();
+                        }
+                    }}
+                >
+                    <Text style={s.voiceToggleTxt}>{voiceEnabled ? '🎤 ON' : '🎤 OFF'}</Text>
+                </TouchableOpacity>
                 <Text style={s.topInfo}>
                     {arcMinToSnellen(currentSize)} · प्रश्न {questionCount + 1}
                 </Text>
             </View>
-
-            {/* E Canvas */}
             <View style={[s.eBox,
-            feedback === 'correct' && { borderColor: '#10B981', backgroundColor: '#D1FAE5' },
-            feedback === 'wrong' && { borderColor: '#EF4444', backgroundColor: '#FEE2E2' },
+            feedback === 'correct' ? { borderColor: '#059669', backgroundColor: '#ECFDF5', borderWidth: 10 } : null,
+            feedback === 'wrong' ? { borderColor: '#DC2626', backgroundColor: '#FEF2F2', borderWidth: 10 } : null,
             ]}>
                 <TumblingE sizePx={sizePx} orientation={orientation} />
             </View>
-
-            {/* Mic indicator */}
-            <View style={s.micRow}>
-                <Animated.View style={[s.micCircle, { transform: [{ scale: micPulse }] },
-                listening ? s.micActive : s.micIdle]}>
-                    <Text style={s.micIcon}>{listening ? '🎙️' : '🔇'}</Text>
-                </Animated.View>
-                <Text style={s.micHint}>
-                    {listening
-                        ? 'सुन रहा है… बोलें!\nListening… speak!'
-                        : 'तैयार हो रहा है…\nPreparing…'}
-                </Text>
-            </View>
-
-            {/* Arrow buttons — fallback */}
-            <Text style={s.fallbackHdr}>या तीर दबाएं / or tap an arrow:</Text>
+            {voiceEnabled && transcript ? (
+                <View style={s.transcriptBox}>
+                    <Text style={s.transcriptTxt}>"{transcript}"</Text>
+                </View>
+            ) : null}
+            {voiceEnabled && (
+                <View style={s.micRow}>
+                    <Animated.View style={[s.micCircle, { transform: [{ scale: micPulse }] },
+                    listening ? s.micActive : s.micIdle]}>
+                        <Text style={s.micIcon}>{listening ? '🎙️' : '🔇'}</Text>
+                    </Animated.View>
+                    <Text style={s.micHint}>
+                        {listening
+                            ? 'सुन रहा है… बोलें!\nListening… speak!'
+                            : (locked && !transcript ? 'समझ रहा है…\nProcessing…' : 'तैयार हो रहा है…\nPreparing…')}
+                    </Text>
+                </View>
+            )}
             <View style={s.arrowWrap}>
                 <TouchableOpacity style={s.arrBtn} onPress={() => handleAnswer('up')}>
                     <Text style={s.arrTxt}>↑</Text>
@@ -353,8 +438,22 @@ const s = StyleSheet.create({
     topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 12 },
     badge: { backgroundColor: '#3B82F6', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6 },
     badgeTxt: { color: '#fff', fontWeight: '700', fontSize: 13 },
-    topInfo: { color: '#64748B', fontSize: 14 },
+    timerBox: {
+        backgroundColor: '#fff',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+    },
+    timerTxt: { fontSize: 13, fontWeight: '700', color: '#64748B' },
+    topInfo: { color: '#64748B', fontSize: 13 },
+    voiceToggle: { backgroundColor: '#10B981', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
+    voiceOff: { backgroundColor: '#94A3B8' },
+    voiceToggleTxt: { color: '#fff', fontSize: 11, fontWeight: '800' },
     eBox: { alignSelf: 'center', borderRadius: 14, borderWidth: 2, borderColor: '#E2E8F0', overflow: 'hidden' },
+    transcriptBox: { alignSelf: 'center', marginTop: 10, backgroundColor: '#334155', paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20, elevation: 3 },
+    transcriptTxt: { fontSize: 13, color: '#FFFFFF', fontStyle: 'italic', fontWeight: 'bold' },
     micRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 18, gap: 14 },
     micCircle: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center' },
     micActive: { backgroundColor: '#DBEAFE', borderWidth: 2, borderColor: '#2563EB' },

@@ -3,9 +3,10 @@
  * Maa App – Grid food card with image placeholder, safety badge, and select state.
  */
 
-import React from 'react';
-import { TouchableOpacity, View, Text, StyleSheet } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { TouchableOpacity, View, Text, StyleSheet, Image, ActivityIndicator } from 'react-native';
 import { Colors, Dimensions } from '../../constants';
+import { getAndCacheFoodImage } from '../../services/ImageService';
 
 const SAFETY_BADGE = {
     safe: null,
@@ -18,9 +19,38 @@ const SAFETY_BADGE = {
  * @param {Object} props.food - Food object from DB
  * @param {boolean} props.selected - Whether this food is selected
  * @param {Function} props.onPress - Tap handler
+ * @param {Function} props.onInfoPress - Info button handler
  */
-export default function FoodCard({ food, selected, onPress }) {
+export default function FoodCard({ food, selected, onPress, onInfoPress }) {
     const badge = SAFETY_BADGE[food.safety_status];
+    const [imgUrl, setImgUrl] = useState(food.image_path || null);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        let isMounted = true;
+        const needsFetch = !food.image_path || !food.image_path.startsWith('http');
+
+        if (needsFetch) {
+            console.log(`[FoodCard] 🔍 Fetching image for: ${food.name_en} (current: ${food.image_path})`);
+            setLoading(true);
+            getAndCacheFoodImage(food).then(url => {
+                if (isMounted && url) {
+                    console.log(`[FoodCard] 🖼️  Image loaded for: ${food.name_en}`);
+                    setImgUrl(url);
+                } else if (isMounted) {
+                    console.log(`[FoodCard] ❌ No image found for: ${food.name_en}`);
+                }
+                if (isMounted) setLoading(false);
+            }).catch(err => {
+                console.error(`[FoodCard] 💥 Error fetching image for ${food.name_en}:`, err);
+                if (isMounted) setLoading(false);
+            });
+        } else {
+            console.log(`[FoodCard] ✅ Already has URL for: ${food.name_en}`);
+            setImgUrl(food.image_path);
+        }
+        return () => { isMounted = false; };
+    }, [food.id, food.image_path]);
 
     return (
         <TouchableOpacity
@@ -33,24 +63,45 @@ export default function FoodCard({ food, selected, onPress }) {
             accessibilityLabel={`${food.name_hi || food.name_en}, ${food.name_en}, ${food.calories} calories${food.safety_status !== 'safe' ? ', ' + (food.safety_status === 'avoid' ? 'avoid during pregnancy' : 'eat in limited quantity') : ''}`}
             accessibilityHint={selected ? 'Double tap to deselect' : 'Double tap to select'}
         >
-            {/* Image placeholder – shows emoji/initial since we don't have real images */}
+            {/* Image section – shows real image from SerpApi with cache & emoji fallback */}
             <View style={[styles.imagePlaceholder, selected && styles.imagePlaceholderSelected]}>
-                <Text style={styles.foodEmoji}>{getCategoryEmoji(food.category)}</Text>
+                {imgUrl ? (
+                    <Image
+                        source={{ uri: imgUrl }}
+                        style={styles.foodImage}
+                    />
+                ) : (
+                    <View style={styles.emojiOverlay}>
+                        <Text style={[styles.foodEmoji, { opacity: loading ? 0.4 : 1 }]}>
+                            {getCategoryEmoji(food.category)}
+                        </Text>
+                    </View>
+                )}
+
+                {loading && (
+                    <View style={styles.loaderOverlay}>
+                        <ActivityIndicator size="small" color={Colors.primary} />
+                    </View>
+                )}
             </View>
 
             {/* Safety badge */}
-            {badge && (
-                <View style={[styles.badge, { backgroundColor: badge.color }]}>
-                    <Text style={styles.badgeText}>{badge.text}</Text>
-                </View>
-            )}
+            {
+                badge && (
+                    <View style={[styles.badge, { backgroundColor: badge.color }]}>
+                        <Text style={styles.badgeText}>{badge.text}</Text>
+                    </View>
+                )
+            }
 
             {/* Checkmark overlay */}
-            {selected && (
-                <View style={styles.checkmark}>
-                    <Text style={styles.checkmarkText}>✓</Text>
-                </View>
-            )}
+            {
+                selected && (
+                    <View style={styles.checkmark}>
+                        <Text style={styles.checkmarkText}>✓</Text>
+                    </View>
+                )
+            }
 
             {/* Labels */}
             <Text style={styles.nameHi} numberOfLines={1}>{food.name_hi || food.name_en}</Text>
@@ -61,7 +112,18 @@ export default function FoodCard({ food, selected, onPress }) {
                     <Text style={styles.sourceText}>• {food.source === 'Open Food Facts' ? 'OFF' : food.source}</Text>
                 )}
             </View>
-        </TouchableOpacity>
+
+            {/* Info Icon for breakdown */}
+            <TouchableOpacity
+                style={styles.infoIconBox}
+                onPress={(e) => {
+                    e.stopPropagation();
+                    onInfoPress && onInfoPress(food);
+                }}
+            >
+                <Text style={styles.infoIconText}>ⓘ</Text>
+            </TouchableOpacity>
+        </TouchableOpacity >
     );
 }
 
@@ -105,8 +167,28 @@ const styles = StyleSheet.create({
     imagePlaceholderSelected: {
         backgroundColor: Colors.primaryLight,
     },
+    foodImage: {
+        width: 60,
+        height: 60,
+        borderRadius: 30,
+        zIndex: 2,
+    },
+    emojiOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1,
+    },
     foodEmoji: {
         fontSize: 30,
+    },
+    loaderOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: 'rgba(255,255,255,0.4)',
+        borderRadius: 30,
+        zIndex: 3,
     },
     badge: {
         position: 'absolute',
@@ -162,6 +244,17 @@ const styles = StyleSheet.create({
         fontSize: 9,
         color: Colors.primary,
         marginLeft: 4,
+        fontWeight: 'bold',
+    },
+    infoIconBox: {
+        position: 'absolute',
+        bottom: 6,
+        right: 6,
+        padding: 4,
+    },
+    infoIconText: {
+        fontSize: 18,
+        color: Colors.primary,
         fontWeight: 'bold',
     },
 });

@@ -21,6 +21,12 @@ import learnContent from '../../../learn_content.json';
 import StatusCard from '../../components/common/StatusCard';
 import EmptyState from '../../components/common/EmptyState';
 import { Colors, Dimensions, SupplementTypes } from '../../constants';
+import GradientCard from '../../components/ui/GradientCard';
+import FloatingAIButton from '../../components/ui/FloatingAIButton';
+import ScanLoadingAnimation from '../../components/ui/ScanLoadingAnimation';
+import designSystem from '../../theme/designSystem';
+import * as Location from 'expo-location';
+import { useT } from '../../i18n/useT';
 import {
     getDailySummary,
     getNextANC,
@@ -50,6 +56,8 @@ function parseCheckups(rawValue) {
 }
 
 export default function HomeScreen({ navigation }) {
+    const { t, isHindi, isBilingual } = useT();
+
     const [profile, setProfile] = useState(null);
     const [dailySummary, setDailySummary] = useState(null);
     const [nutritionGaps, setNutritionGaps] = useState(null);
@@ -63,7 +71,9 @@ export default function HomeScreen({ navigation }) {
     const loadData = useCallback(async () => {
         setLoadError('');
         try {
+            console.log('[HomeScreen] Loading Profile...');
             const userProfile = await getUserProfile();
+            console.log('[HomeScreen] Profile loaded:', userProfile?.name);
             setProfile(userProfile);
 
             const summary = await getDailySummary();
@@ -76,10 +86,11 @@ export default function HomeScreen({ navigation }) {
             const gaps = calculateNutritionGaps(consumed, requirements);
             setNutritionGaps(gaps);
             setRecommendations(generateRecommendations(gaps));
-            setNextANC(await getNextANC(week));
+            const anc = await getNextANC(week);
+            setNextANC(anc);
         } catch (error) {
             console.error('[HomeScreen] Load error:', error);
-            setLoadError('Unable to load dashboard data. Pull to refresh or try again.');
+            setLoadError(t('error_load'));
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -104,6 +115,15 @@ export default function HomeScreen({ navigation }) {
         return unsubscribe;
     }, [navigation, loadData]);
 
+    useEffect(() => {
+        (async () => {
+            const { status } = await Location.requestForegroundPermissionsAsync();
+            if (status !== 'granted') {
+                console.log('[HomeScreen] Location permission not granted');
+            }
+        })();
+    }, []);
+
     const onRefresh = () => {
         setRefreshing(true);
         loadData();
@@ -112,7 +132,7 @@ export default function HomeScreen({ navigation }) {
     const handleLogWater = async () => {
         try {
             const glasses = await logWater();
-            Alert.alert('Water Logged / पानी पिया', `Water: ${glasses} glasses / ${glasses} गिलास पानी`);
+            Alert.alert(t('water_logged_title'), t('water_logged_msg', { num: glasses }));
             loadData();
         } catch (error) {
             console.error('[HomeScreen] logWater error:', error);
@@ -121,25 +141,25 @@ export default function HomeScreen({ navigation }) {
 
     const handleLogSupplement = () => {
         Alert.alert(
-            'Supplement / दवाई',
-            'Which supplement did you take? \nआपने कौन सी दवाई ली?',
+            t('supplement_title'),
+            t('which_supps'),
             SupplementTypes.map((item) => ({
-                text: `${item.emoji} ${item.name_hi || item.name_en}`,
+                text: `${item.emoji} ${isBilingual ? (item.name_hi + ' / ' + item.name_en) : (isHindi ? item.name_hi : item.name_en)}`,
                 onPress: async () => {
                     try {
                         await logSupplement(item.id);
-                        Alert.alert('Saved / सुरक्षित', `${item.name_hi || item.name_en} recorded.`);
+                        Alert.alert(t('saved'), t('recorded', { name: (isHindi ? item.name_hi : item.name_en) }));
                         loadData();
                     } catch (error) {
                         console.error('[HomeScreen] logSupplement error:', error);
                     }
                 },
-            })).concat([{ text: 'Cancel / रद्द करें', style: 'cancel' }])
+            })).concat([{ text: t('cancel'), style: 'cancel' }])
         );
     };
 
     const handleEmergency = () => {
-        showEmergencyOptions(profile);
+        navigation.navigate('SOS', { profile });
     };
 
     const week = profile?.pregnancy_week || 0;
@@ -153,209 +173,240 @@ export default function HomeScreen({ navigation }) {
     const checkupsText = useMemo(() => parseCheckups(nextANC?.checkups_list), [nextANC?.checkups_list]);
 
     if (loading) {
-        return (
-            <View style={styles.centerState}>
-                <ActivityIndicator size="large" color={Colors.primary} />
-                <Text style={styles.stateText}>नमस्ते {name}, डैशबोर्ड लोड हो रहा है... / Loading dashboard...</Text>
-            </View>
-        );
+        return <ScanLoadingAnimation title={t('dashboard_loading', { name })} source={null} />;
     }
 
     return (
-        <ScrollView
-            style={styles.container}
-            contentContainerStyle={styles.content}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />}
-        >
-            {/* Error Banner */}
-            {loadError ? (
-                <View style={styles.errorBanner} accessible accessibilityRole="alert" accessibilityLabel={loadError}>
-                    <Text style={styles.errorBannerEmoji}>⚠️</Text>
-                    <Text style={styles.errorBannerText}>{loadError}</Text>
-                </View>
-            ) : null}
-
-            {/* Header */}
-            <View style={styles.header}>
-                <View style={styles.headerLeft}>
-                    <Text style={styles.greeting}>नमस्ते, {name}</Text>
-                    <Text style={styles.subGreeting}>आज के लिए आपका प्लान / Your plan for today</Text>
-                </View>
-                <TouchableOpacity
-                    style={styles.emergencyBtn}
-                    onPress={handleEmergency}
-                    accessibilityRole="button"
-                    accessibilityLabel="Emergency SOS"
-                    accessibilityHint="Double tap to call emergency services"
-                >
-                    <Text style={styles.emergencyText}>🚨</Text>
-                    <Text style={styles.emergencyLabel}>SOS</Text>
-                </TouchableOpacity>
-            </View>
-
-            {/* Pregnancy Progress */}
-            <View style={styles.progressCard}>
-                <View style={styles.weekInfo}>
-                    <Text style={styles.weekLabel}>गर्भावस्था का हफ्ता / Pregnancy Week</Text>
-                    <Text style={styles.weekValue}>{week || '--'}</Text>
-                </View>
-                <View style={styles.progressSeparator} />
-                <View style={[styles.statusBadge, { backgroundColor: Colors.primary + '15' }]}>
-                    <Text style={[styles.statusBadgeText, { color: Colors.primary }]}>
-                        {week > 28 ? 'तीसरी तिमाही / 3rd Trimester' : week > 13 ? 'दूसरी तिमाही / 2nd Trimester' : 'पहली तिमाही / 1st Trimester'}
-                    </Text>
-                </View>
-            </View>
-
-            {/* Primary Tasks - Large Cards */}
-            <Text style={styles.sectionTitle}>आज के मुख्य काम / Major Tasks Today</Text>
-
-            <TouchableOpacity
-                style={[styles.taskCard, { backgroundColor: Colors.primary }]}
-                onPress={() => navigation.navigate('Food')}
-                accessibilityRole="button"
-                accessibilityLabel="Log Your Meals. खाना लिखें."
-                accessibilityHint="Opens meal logging screen"
+        <View style={styles.container}>
+            <ScrollView
+                style={styles.container}
+                contentContainerStyle={styles.content}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[designSystem.colors.primary]} />}
             >
-                <View style={styles.taskIconContainer}>
-                    <Text style={styles.taskEmoji}>🍚</Text>
-                </View>
-                <View style={styles.taskTextContent}>
-                    <Text style={styles.taskTitleHi}>खाना लिखें</Text>
-                    <Text style={styles.taskTitleEn}>Log Your Meals</Text>
-                    <Text style={styles.taskStatus}>
-                        {nutritionGaps?.calories?.percentage >= 100 ? 'लक्ष्य पूरा! / Target met!' : 'पोषण ट्रैक करें / Track nutrition'}
-                    </Text>
-                </View>
-                <Text style={styles.taskArrow}>→</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-                style={[styles.taskCard, { backgroundColor: Colors.success }]}
-                onPress={handleLogSupplement}
-                accessibilityRole="button"
-                accessibilityLabel={`Take Supplements. दवाई लें. ${supplementCount} of ${supplementTarget} taken today.`}
-            >
-                <View style={styles.taskIconContainer}>
-                    <Text style={styles.taskEmoji}>💊</Text>
-                </View>
-                <View style={styles.taskTextContent}>
-                    <Text style={styles.taskTitleHi}>दवाई लें</Text>
-                    <Text style={styles.taskTitleEn}>Take Supplements</Text>
-                    <Text style={styles.taskStatus}>
-                        {supplementCount}/{supplementTarget} आज ली गई / taken today
-                    </Text>
-                </View>
-                <Text style={styles.taskArrow}>→</Text>
-            </TouchableOpacity>
-
-            {nextANC && (
-                <TouchableOpacity
-                    style={[styles.taskCard, { backgroundColor: Colors.info }]}
-                    onPress={() => navigation.navigate('Health')}
-                >
-                    <View style={styles.taskIconContainer}>
-                        <Text style={styles.taskEmoji}>🏥</Text>
+                {/* Error Banner */}
+                {loadError ? (
+                    <View style={styles.errorBanner} accessible accessibilityRole="alert" accessibilityLabel={loadError}>
+                        <Text style={styles.errorBannerEmoji}>⚠️</Text>
+                        <Text style={styles.errorBannerText}>{loadError}</Text>
                     </View>
-                    <View style={styles.taskTextContent}>
-                        <Text style={styles.taskTitleHi}>अगली जांच (ANC)</Text>
-                        <Text style={styles.taskTitleEn}>Next Doctor Visit</Text>
-                        <Text style={styles.taskStatus}>
-                            हफ्ता / Week {nextANC.recommended_week} • जांचें देखें / View tests
+                ) : null}
+
+                {/* Header */}
+                <View style={styles.header}>
+                    <View style={styles.headerLeft}>
+                        <Text style={styles.greeting}>{t('greeting')}, {name}</Text>
+                        <Text style={styles.subGreeting}>{t('plan_today')}</Text>
+                    </View>
+                    <TouchableOpacity
+                        style={styles.emergencyBtn}
+                        onPress={handleEmergency}
+                        accessibilityRole="button"
+                        accessibilityLabel="Emergency SOS"
+                        accessibilityHint="Double tap to call emergency services"
+                    >
+                        <Text style={styles.emergencyText}>🚨</Text>
+                        <Text style={styles.emergencyLabel}>SOS</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {/* Pregnancy Progress */}
+                <View style={styles.progressCard}>
+                    <View style={styles.weekInfo}>
+                        <Text style={styles.weekLabel}>{t('pregnancy_week')}</Text>
+                        <Text style={styles.weekValue}>{week || '--'}</Text>
+                    </View>
+                    <View style={styles.progressSeparator} />
+                    <View style={[styles.statusBadge, { backgroundColor: Colors.primary + '15' }]}>
+                        <Text style={[styles.statusBadgeText, { color: Colors.primary }]}>
+                            {week > 28 ? t('tri_3') : week > 13 ? t('tri_2') : t('tri_1')}
                         </Text>
                     </View>
-                    <Text style={styles.taskArrow}>→</Text>
-                </TouchableOpacity>
-            )}
+                </View>
 
-            {/* Status Tracking Grid */}
-            <Text style={styles.sectionTitle}>आपकी प्रगति / Status Tracking</Text>
-            <View style={styles.statusGrid}>
-                <StatusCard
-                    emoji="🥗"
-                    labelHi="पोषण"
-                    labelEn="Nutrition"
-                    value={nutritionGaps?.calories ? `${Math.round(nutritionGaps.calories.percentage)}%` : '0%'}
-                    percentage={nutritionGaps?.calories?.percentage || 0}
-                    status={overallNutrition}
-                    onPress={() => navigation.navigate('Food')}
-                />
-                <StatusCard
-                    emoji="💧"
-                    labelHi="पानी"
-                    labelEn="Water"
-                    value={`${waterGlasses}/${waterTarget}`}
-                    percentage={(waterGlasses / waterTarget) * 100}
-                    status={waterGlasses >= 8 ? 'good' : waterGlasses >= 5 ? 'medium' : 'low'}
-                    onPress={handleLogWater}
-                />
-            </View>
-
-            {/* Daily Wisdom Section */}
-            {dailyTip && (
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>आज की सीख / Daily Wisdom</Text>
-                    <TouchableOpacity
-                        style={styles.wisdomCard}
-                        onPress={() => navigation.navigate('Learn')}
-                    >
-                        <View style={styles.wisdomEmojiContainer}>
-                            <Text style={styles.wisdomEmoji}>{dailyTip.emoji}</Text>
+                {/* Ration Card Entitlements Card */}
+                <TouchableOpacity activeOpacity={0.9} onPress={() => navigation.navigate('RationCard')}>
+                    <GradientCard colors={designSystem.colors.cardGradientPurple} contentStyle={styles.taskCardRow} style={styles.taskCardSpacing}>
+                        <View style={styles.taskIconContainer}>
+                            <Text style={styles.taskEmoji}>🃏</Text>
                         </View>
-                        <View style={styles.wisdomContent}>
-                            <Text style={styles.wisdomTitle}>{dailyTip.titleHi}</Text>
-                            <Text style={styles.wisdomText}>{dailyTip.bodyHi}</Text>
-                            <Text style={styles.readMoreText}>और जानें / Read more →</Text>
+                        <View style={styles.taskTextContent}>
+                            <Text style={styles.taskTitleHi}>{t('entitlement_report')}</Text>
+                            {isBilingual && <Text style={styles.taskTitleEn}>Entitlement Report</Text>}
+                            <Text style={styles.taskStatus}>{t('gov_schemes')}</Text>
+                        </View>
+                        <Text style={styles.taskArrow}>→</Text>
+                    </GradientCard>
+                </TouchableOpacity>
+
+                {/* Primary Tasks - Large Cards */}
+                <Text style={styles.sectionTitle}>{t('major_tasks_today')}</Text>
+
+                <TouchableOpacity activeOpacity={0.9} onPress={() => navigation.navigate('Food')}>
+                    <GradientCard colors={designSystem.colors.cardGradientPink} contentStyle={styles.taskCardRow} style={styles.taskCardSpacing}>
+                        <View style={styles.taskIconContainer}>
+                            <Text style={styles.taskEmoji}>🍚</Text>
+                        </View>
+                        <View style={styles.taskTextContent}>
+                            <Text style={styles.taskTitleHi}>{t('log_meals_hi')}</Text>
+                            {isBilingual && <Text style={styles.taskTitleEn}>Log Your Meals</Text>}
+                            <Text style={styles.taskStatus}>
+                                {nutritionGaps?.calories?.percentage >= 100 ? t('target_met') : t('track_nutrition')}
+                            </Text>
+                        </View>
+                        <Text style={styles.taskArrow}>→</Text>
+                    </GradientCard>
+                </TouchableOpacity>
+
+                <TouchableOpacity activeOpacity={0.9} onPress={handleLogSupplement}>
+                    <GradientCard colors={['#00C896', '#50E3C2']} contentStyle={styles.taskCardRow} style={styles.taskCardSpacing}>
+                        <View style={styles.taskIconContainer}>
+                            <Text style={styles.taskEmoji}>💊</Text>
+                        </View>
+                        <View style={styles.taskTextContent}>
+                            <Text style={styles.taskTitleHi}>{t('take_supps_hi')}</Text>
+                            {isBilingual && <Text style={styles.taskTitleEn}>Take Supplements</Text>}
+                            <Text style={styles.taskStatus}>
+                                {t('taken_today', { taken: supplementCount, target: supplementTarget })}
+                            </Text>
+                        </View>
+                        <Text style={styles.taskArrow}>→</Text>
+                    </GradientCard>
+                </TouchableOpacity>
+
+                {nextANC && (
+                    <TouchableOpacity activeOpacity={0.9} onPress={() => navigation.navigate('Health')}>
+                        <GradientCard colors={['#4FACFE', '#6EC6FF']} contentStyle={styles.taskCardRow} style={styles.taskCardSpacing}>
+                            <View style={styles.taskIconContainer}>
+                                <Text style={styles.taskEmoji}>🏥</Text>
+                            </View>
+                            <View style={styles.taskTextContent}>
+                                <Text style={styles.taskTitleHi}>{t('next_anc_hi')}</Text>
+                                {isBilingual && <Text style={styles.taskTitleEn}>Next Doctor Visit</Text>}
+                                <Text style={styles.taskStatus}>
+                                    {t('view_tests', { week: nextANC.recommended_week })}
+                                </Text>
+                            </View>
+                            <Text style={styles.taskArrow}>→</Text>
+                        </GradientCard>
+                    </TouchableOpacity>
+                )}
+
+                {/* Status Tracking Grid */}
+                <Text style={styles.sectionTitle}>{t('status_tracking')}</Text>
+                <View style={styles.statusGrid}>
+                    <StatusCard
+                        emoji="🥗"
+                        labelHi="पोषण"
+                        labelEn="Nutrition"
+                        value={nutritionGaps?.calories ? `${Math.round(nutritionGaps.calories.percentage)}%` : '0%'}
+                        percentage={nutritionGaps?.calories?.percentage || 0}
+                        status={overallNutrition}
+                        onPress={() => navigation.navigate('Food')}
+                    />
+                    <StatusCard
+                        emoji="💧"
+                        labelHi="पानी"
+                        labelEn="Water"
+                        value={`${waterGlasses}/${waterTarget}`}
+                        percentage={(waterGlasses / waterTarget) * 100}
+                        status={waterGlasses >= 8 ? 'good' : waterGlasses >= 5 ? 'medium' : 'low'}
+                        onPress={handleLogWater}
+                    />
+                </View>
+
+                {/* Daily Wisdom Section */}
+                {dailyTip && (
+                    <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>{t('daily_wisdom')}</Text>
+                        <TouchableOpacity
+                            style={styles.wisdomCard}
+                            onPress={() => navigation.navigate('Learn')}
+                        >
+                            <View style={styles.wisdomEmojiContainer}>
+                                <Text style={styles.wisdomEmoji}>{dailyTip.emoji}</Text>
+                            </View>
+                            <View style={styles.wisdomContent}>
+                                <Text style={styles.wisdomTitle}>{isHindi || isBilingual ? dailyTip.titleHi : dailyTip.titleEn}</Text>
+                                <Text style={styles.wisdomText}>{isHindi || isBilingual ? dailyTip.bodyHi : dailyTip.bodyEn}</Text>
+                                <Text style={styles.readMoreText}>{t('read_more')}</Text>
+                            </View>
+                        </TouchableOpacity>
+                    </View>
+                )}
+
+                {/* Recommendations */}
+                {recommendations.length > 0 ? (
+                    <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>{t('recommended')}</Text>
+                        <View style={styles.recContainer}>
+                            {recommendations.slice(0, 2).map((item, index) => (
+                                <View key={index} style={[styles.recItem, item.priority === 'high' ? styles.recItemHigh : null]}>
+                                    <Text style={styles.recBullet}>{item.priority === 'high' ? '⚠️' : '💡'}</Text>
+                                    <Text style={styles.recText}>{isBilingual ? `${item.hi}\n${item.en}` : (isHindi ? item.hi : item.en)}</Text>
+                                </View>
+                            ))}
+                        </View>
+                    </View>
+                ) : null}
+
+                {/* AI Chatbot */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>✦ {t('ai_companion') || 'AI Companion'}</Text>
+                    <TouchableOpacity
+                        style={styles.aiChatCard}
+                        activeOpacity={0.85}
+                        onPress={() => navigation.navigate('AIChatbot')}
+                        accessibilityRole="button"
+                        accessibilityLabel="Open Janani AI Chatbot"
+                    >
+                        <View style={styles.aiChatGlow} />
+                        <View style={styles.aiChatRow}>
+                            <View style={styles.aiChatIconWrap}>
+                                <Text style={{ fontSize: 26 }}>🤱</Text>
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.aiChatTitle}>Ask Janani AI</Text>
+                                <Text style={styles.aiChatSub}>
+                                    Pregnancy nutrition, health tips, gov. schemes & more — available 24/7
+                                </Text>
+                            </View>
+                            <Text style={styles.aiChatArrow}>→</Text>
                         </View>
                     </TouchableOpacity>
                 </View>
-            )}
 
-            {/* Recommendations */}
-            {recommendations.length > 0 && (
+                {/* Help / Contact Section */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>आपके लिए सुझाव / Recommended</Text>
-                    <View style={styles.recContainer}>
-                        {recommendations.slice(0, 2).map((item, index) => (
-                            <View key={index} style={[styles.recItem, item.priority === 'high' && styles.recItemHigh]}>
-                                <Text style={styles.recBullet}>{item.priority === 'high' ? '⚠️' : '💡'}</Text>
-                                <Text style={styles.recText}>{item.hi}</Text>
-                            </View>
-                        ))}
+                    <Text style={styles.sectionTitle}>{t('need_help')}</Text>
+                    <View style={styles.helpRow}>
+                        <TouchableOpacity
+                            style={styles.helpCard}
+                            onPress={() => {
+                                if (profile?.asha_contact) {
+                                    Linking.openURL(`tel:${profile.asha_contact}`);
+                                } else {
+                                    Alert.alert('Contact Missing', 'Add ASHA contact in your profile.');
+                                }
+                            }}
+                        >
+                            <Text style={styles.helpEmoji}>👩‍⚕️</Text>
+                            <Text style={styles.helpLabel}>{t('asha')}</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.helpCard, { borderLeftColor: Colors.danger }]}
+                            onPress={handleEmergency}
+                        >
+                            <Text style={styles.helpEmoji}>🚑</Text>
+                            <Text style={styles.helpLabel}>{t('help')}</Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
-            )}
 
-            {/* Help / Contact Section */}
-            <View style={styles.section}>
-                <Text style={styles.sectionTitle}>मदद चाहिए? / Need Help?</Text>
-                <View style={styles.helpRow}>
-                    <TouchableOpacity
-                        style={styles.helpCard}
-                        onPress={() => {
-                            if (profile?.asha_contact) {
-                                Linking.openURL(`tel:${profile.asha_contact}`);
-                            } else {
-                                Alert.alert('Contact Missing', 'Add ASHA contact in your profile.');
-                            }
-                        }}
-                    >
-                        <Text style={styles.helpEmoji}>👩‍⚕️</Text>
-                        <Text style={styles.helpLabel}>आशा वर्कर / ASHA</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={[styles.helpCard, { borderLeftColor: Colors.danger }]}
-                        onPress={handleEmergency}
-                    >
-                        <Text style={styles.helpEmoji}>🚑</Text>
-                        <Text style={styles.helpLabel}>इमरजेंसी / Help</Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-
-            <View style={{ height: 40 }} />
-        </ScrollView>
+                <View style={{ height: 40 }} />
+            </ScrollView>
+            <FloatingAIButton onPress={() => navigation.navigate('AIChatbot')} />
+        </View>
     );
 }
 
@@ -433,6 +484,15 @@ const styles = StyleSheet.create({
         marginTop: 8
     },
 
+    taskCardSpacing: {
+        marginBottom: 0,
+        marginTop: 4,
+    },
+    taskCardRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 18,
+    },
     taskCard: {
         borderRadius: 20,
         padding: 18,
@@ -541,4 +601,57 @@ const styles = StyleSheet.create({
     },
     errorBannerEmoji: { fontSize: 20, marginRight: 10 },
     errorBannerText: { flex: 1, fontSize: 14, color: Colors.danger, fontWeight: '600', lineHeight: 20 },
+
+    // AI Chat card
+    aiChatCard: {
+        borderRadius: 20,
+        backgroundColor: '#0d0b1e',
+        overflow: 'hidden',
+        padding: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(124,58,237,0.3)',
+        elevation: 4,
+        shadowColor: '#7c3aed',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+    },
+    aiChatGlow: {
+        position: 'absolute',
+        top: -20,
+        right: -20,
+        width: 100,
+        height: 100,
+        borderRadius: 50,
+        backgroundColor: 'rgba(255,92,138,0.12)',
+    },
+    aiChatRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 14,
+    },
+    aiChatIconWrap: {
+        width: 52,
+        height: 52,
+        borderRadius: 26,
+        backgroundColor: 'rgba(124,58,237,0.18)',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    aiChatTitle: {
+        fontSize: 17,
+        fontWeight: '800',
+        color: '#ffffff',
+        marginBottom: 3,
+    },
+    aiChatSub: {
+        fontSize: 12,
+        color: 'rgba(255,255,255,0.55)',
+        lineHeight: 17,
+    },
+    aiChatArrow: {
+        fontSize: 20,
+        color: '#FF5C8A',
+        fontWeight: '800',
+    },
 });

@@ -20,9 +20,9 @@ export default function EmptyState({
     return (
         <View style={styles.container} accessible accessibilityLabel={`${titleEn || titleHi}. ${subtitleEn || ''}`}>
             <Text style={styles.emoji}>{emoji}</Text>
-            {titleHi && <Text style={styles.titleHi}>{titleHi}</Text>}
-            {titleEn && <Text style={styles.titleEn}>{titleEn}</Text>}
-            {subtitleEn && <Text style={styles.subtitle}>{subtitleEn}</Text>}
+            {titleHi ? <Text style={styles.titleHi}>{titleHi}</Text> : null}
+            {titleEn ? <Text style={styles.titleEn}>{titleEn}</Text> : null}
+            {subtitleEn ? <Text style={styles.subtitle}>{subtitleEn}</Text> : null}
             {actionLabel && onAction && (
                 <TouchableOpacity
                     style={styles.actionBtn}

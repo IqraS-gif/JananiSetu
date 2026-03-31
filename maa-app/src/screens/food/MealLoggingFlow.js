@@ -10,7 +10,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity,
-    FlatList, Alert, TextInput, ActivityIndicator,
+    FlatList, Alert, TextInput, ActivityIndicator, Modal,
 } from 'react-native';
 
 import FoodCard from '../../components/common/FoodCard';
@@ -25,8 +25,22 @@ import {
 } from '../../services/database/DatabaseService';
 import { calculateMealNutrition } from '../../services/nutrition/NutritionCalculator';
 import { Colors, Dimensions, Labels, FoodKeywords, QuickMeals } from '../../constants';
-import { useSpeechRecognitionEvent } from 'expo-speech-recognition';
-import { VoiceRecognitionService } from '../../services/VoiceRecognitionService';
+// 29-30: Refactored to use centralized VoiceRecognitionService
+import { VoiceRecognitionService, useSpeechRecognitionEvent } from '../../services/VoiceRecognitionService';
+import * as ImagePicker from 'expo-image-picker';
+import { identifyFoodFromImage } from '../../services/ai/GeminiService';
+import {
+    getCollectiveNutrients,
+    loadCsvData,
+    getFoodSafetyInsights,
+    calculateNutritionalSafety,
+    getNutrientsForFood
+} from '../../services/ai/FoodMappingService';
+import { getAIFoodNutrition, extractFoodNames } from '../../services/ai/GroqService';
+import * as FileSystem from 'expo-file-system/legacy';
+import { Asset } from 'expo-asset';
+import { TextToSpeechService } from '../../services/TextToSpeechService';
+import { useT } from '../../i18n/useT';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -52,10 +66,14 @@ const LIMIT = 30;
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export default function MealLoggingFlow({ navigation }) {
+    const { t, isHindi, isBilingual } = useT();
     const [step, setStep] = useState(1);
     const [mealType, setMealType] = useState(getAutoMealType());
     const [selectedFoods, setSelectedFoods] = useState([]);
     const [saving, setSaving] = useState(false);
+    const [selectedDetailFood, setSelectedDetailFood] = useState(null);
+    const [showDetailModal, setShowDetailModal] = useState(false);
+    const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
 
     const goBack = () => {
         if (step > 1) setStep(step - 1);
@@ -70,18 +88,30 @@ export default function MealLoggingFlow({ navigation }) {
                 portion_multiplier: sf.portion_multiplier,
             }));
             await saveMealLog({ mealType, items });
+
+            // Stop voice on success before leaving
+            TextToSpeechService.stop();
+
             Alert.alert(
-                '✅ ' + Labels.mealSaved.hi,
-                Labels.mealSaved.en,
-                [{ text: '👍 ठीक है / OK', onPress: () => navigation.goBack() }]
+                '✅ ' + t('meal_saved_title'),
+                t('meal_saved_msg'),
+                [{ text: t('ok'), onPress: () => navigation.goBack() }]
             );
         } catch (error) {
             console.error('[MealLog] Save error:', error);
-            Alert.alert('❌', 'कुछ गलत हुआ / Something went wrong');
+            Alert.alert('❌', t('something_went_wrong'));
         } finally {
             setSaving(false);
         }
     };
+
+    // Voice Cleanup
+    useEffect(() => {
+        return () => {
+            console.log('[MealLoggingFlow] Unmounting, stopping voice...');
+            TextToSpeechService.stop();
+        };
+    }, []);
 
     return (
         <View style={styles.container}>
@@ -89,7 +119,7 @@ export default function MealLoggingFlow({ navigation }) {
             <View style={styles.topNav}>
                 <TouchableOpacity onPress={goBack} style={styles.headerBackBtn}
                     accessibilityRole="button" accessibilityLabel="Go back">
-                    <Text style={styles.headerBackText}>← पीछे / Back</Text>
+                    <Text style={styles.headerBackText}>← {t('back')}</Text>
                 </TouchableOpacity>
                 <View
                     style={styles.progressContainer}
@@ -113,6 +143,12 @@ export default function MealLoggingFlow({ navigation }) {
                         setSelectedFoods(foods.map(f => ({ food: f, portion_multiplier: 1.0 })))
                     }
                     onNext={() => setStep(2)}
+                    onFoodClick={(f, mult = 1.0) => {
+                        setSelectedDetailFood({ food: f, portion_multiplier: mult });
+                        setShowDetailModal(true);
+                    }}
+                    isVoiceEnabled={isVoiceEnabled}
+                    setIsVoiceEnabled={setIsVoiceEnabled}
                 />
             )}
 
@@ -121,6 +157,10 @@ export default function MealLoggingFlow({ navigation }) {
                     selectedFoods={selectedFoods}
                     onUpdate={setSelectedFoods}
                     onNext={() => setStep(3)}
+                    onFoodClick={(f, mult) => {
+                        setSelectedDetailFood({ food: f, portion_multiplier: mult });
+                        setShowDetailModal(true);
+                    }}
                 />
             )}
 
@@ -130,8 +170,86 @@ export default function MealLoggingFlow({ navigation }) {
                     selectedFoods={selectedFoods}
                     saving={saving}
                     onSave={handleSaveMeal}
+                    onFoodClick={(sf) => {
+                        setSelectedDetailFood(sf);
+                        setShowDetailModal(true);
+                    }}
+                    isVoiceEnabled={isVoiceEnabled}
+                    setIsVoiceEnabled={setIsVoiceEnabled}
                 />
             )}
+
+            {/* SHARED NUTRITION MODAL */}
+            <Modal
+                transparent={true}
+                visible={showDetailModal}
+                animationType="fade"
+                onRequestClose={() => setShowDetailModal(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalEmoji}>ℹ️</Text>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.modalTitle}>
+                                    {isBilingual ? selectedDetailFood?.food.name_en : (isHindi ? (selectedDetailFood?.food.name_hi || selectedDetailFood?.food.name_en) : selectedDetailFood?.food.name_en)}
+                                </Text>
+                                <Text style={styles.modalSubtitle}>
+                                    {t('nutrition_info')}
+                                </Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setShowDetailModal(false)}>
+                                <Text style={styles.closeModalText}>✕</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <Text style={styles.portionLabel}>
+                            {t('size')}: {selectedDetailFood?.portion_multiplier === 0.5 ? t('less') : selectedDetailFood?.portion_multiplier === 1.5 ? t('more') : t('medium')}
+                            {' '}({selectedDetailFood?.portion_multiplier}x portion)
+                        </Text>
+
+                        <View style={styles.detailGrid}>
+                            <View style={styles.detailCard}>
+                                <Text style={styles.detailVal}>
+                                    {Math.round((selectedDetailFood?.food.calories || 0) * (selectedDetailFood?.portion_multiplier || 1))}
+                                </Text>
+                                <Text style={styles.detailLab}>kcal</Text>
+                            </View>
+                            <View style={styles.detailCard}>
+                                <Text style={styles.detailVal}>
+                                    {Math.round((selectedDetailFood?.food.protein || 0) * (selectedDetailFood?.portion_multiplier || 1))}g
+                                </Text>
+                                <Text style={styles.detailLab}>{t('protein_label')}</Text>
+                            </View>
+                            <View style={styles.detailCard}>
+                                <Text style={styles.detailVal}>
+                                    {Math.round((selectedDetailFood?.food.iron || 0) * (selectedDetailFood?.portion_multiplier || 1))}mg
+                                </Text>
+                                <Text style={styles.detailLab}>{t('iron_label')}</Text>
+                            </View>
+                            <View style={styles.detailCard}>
+                                <Text style={styles.detailVal}>
+                                    {Math.round((selectedDetailFood?.food.calcium || 0) * (selectedDetailFood?.portion_multiplier || 1))}mg
+                                </Text>
+                                <Text style={styles.detailLab}>Ca (mg)</Text>
+                            </View>
+                            <View style={styles.detailCard}>
+                                <Text style={styles.detailVal}>
+                                    {Math.round((selectedDetailFood?.food.folate || 0) * (selectedDetailFood?.portion_multiplier || 1))}µg
+                                </Text>
+                                <Text style={styles.detailLab}>{t('folate_label')}</Text>
+                            </View>
+                        </View>
+
+                        <TouchableOpacity
+                            style={styles.modalCloseBtn}
+                            onPress={() => setShowDetailModal(false)}
+                        >
+                            <Text style={styles.modalCloseBtnText}>{t('ok')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -140,13 +258,21 @@ export default function MealLoggingFlow({ navigation }) {
 // STEP 1: INTEGRATED SELECTION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNext }) {
+function StepSelection({
+    mealType, setMealType, selectedIds, onFoodsChange, onNext, onFoodClick,
+    isVoiceEnabled, setIsVoiceEnabled
+}) {
+    const { t, isBilingual, isHindi } = useT();
     const [query, setQuery] = useState('');
     const [activeCategory, setActiveCategory] = useState('all');
     const [foods, setFoods] = useState([]);
     const [loading, setLoading] = useState(false);
     const [selectedObjects, setSelectedObjects] = useState([]);
-    const [inputMethod, setInputMethod] = useState('grid'); // 'grid' | 'voice' | 'quick'
+    const [inputMethod, setInputMethod] = useState('grid'); // 'grid' | 'voice' | 'quick' | 'photo'
+
+    // Photo state
+    const [photoResults, setPhotoResults] = useState(null);
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
 
     // Use refs for pagination so loadFoods always reads current values (avoids stale closure)
     const offsetRef = useRef(0);
@@ -157,6 +283,7 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
     const [textInput, setTextInput] = useState('');
     const [detectedFoods, setDetectedFoods] = useState([]);
     const [isListening, setIsListening] = useState(false);
+    const [isTranscribing, setIsTranscribing] = useState(false);
 
     const loadFoods = useCallback(async (isNewSearch = false) => {
         if (isLoadingRef.current && !isNewSearch) return;
@@ -224,21 +351,56 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
 
     const parseTextForFoods = useCallback(async (text) => {
         if (!text.trim()) return;
-        const fullText = text.toLowerCase();
-        const foodIds = new Set();
-        for (const [keyword, foodId] of Object.entries(FoodKeywords)) {
-            if (fullText.includes(keyword.toLowerCase())) foodIds.add(foodId);
+        setIsTranscribing(true);
+
+        try {
+            console.log(`[StepSelection] Starting dynamic food extraction for: "${text}"`);
+
+            // 1. Extract Food Names using AI
+            const foodNames = await extractFoodNames(text);
+            console.log(`[StepSelection] Extracted names:`, foodNames);
+
+            if (!foodNames || foodNames.length === 0) {
+                return;
+            }
+
+            const foods = [];
+            for (const name of foodNames) {
+                // 2. Multi-Tier Lookup (DB -> Dataset -> AI Fallback)
+                const nutrients = await getNutrientsForFood(name);
+                if (nutrients) {
+                    foods.push({
+                        id: nutrients.is_ai_generated ? `ai_${Date.now()}_${Math.random().toString(36).substr(2, 5)}` : (nutrients.id || `mapped_${Math.random()}`),
+                        name_en: nutrients.name,
+                        name_hi: nutrients.name_hi || nutrients.name,
+                        calories: nutrients.calories,
+                        protein: nutrients.protein,
+                        iron: nutrients.iron,
+                        calcium: nutrients.calcium,
+                        folate: nutrients.folate,
+                        is_ai_generated: nutrients.is_ai_generated || false,
+                        source: nutrients.source
+                    });
+                }
+            }
+
+            if (foods.length > 0) {
+                setDetectedFoods(foods);
+                // Merge into selectedObjects
+                const merged = [...selectedObjects];
+                foods.forEach(f => {
+                    if (!merged.find(s => s.name_en === f.name_en)) {
+                        merged.push(f);
+                    }
+                });
+                setSelectedObjects(merged);
+                onFoodsChange(merged);
+            }
+        } catch (e) {
+            console.warn('[StepSelection] Dynamic parsing failed:', e);
+        } finally {
+            setIsTranscribing(false);
         }
-        const foods = [];
-        for (const id of foodIds) {
-            const food = await getFoodById(id);
-            if (food) foods.push(food);
-        }
-        setDetectedFoods(foods);
-        // Also merge into selectedObjects
-        const merged = [...selectedObjects, ...foods.filter(f => !selectedObjects.find(s => s.id === f.id))];
-        setSelectedObjects(merged);
-        onFoodsChange(merged);
     }, [selectedObjects, onFoodsChange]);
 
     const handleVoiceText = (text) => {
@@ -249,19 +411,111 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
     const toggleListening = async () => {
         try {
             if (isListening) {
-                await VoiceRecognitionService.stop();
                 setIsListening(false);
+                // The transcription status will be handled by parseTextForFoods
+                // triggered by the 'result' event from stop()
+                await VoiceRecognitionService.stop();
             } else {
                 const granted = await VoiceRecognitionService.requestPermissions();
-                if (!granted) { Alert.alert('Permission Denied', 'Microphone access required.'); return; }
+                if (!granted) {
+                    Alert.alert(
+                        t('permission_required'),
+                        t('mic_permission_msg'),
+                        [{ text: t('ok') }]
+                    );
+                    return;
+                }
                 setIsListening(true);
                 await VoiceRecognitionService.start();
             }
         } catch (e) {
             setIsListening(false);
-            if (e.message?.includes('not available')) {
-                Alert.alert('Dev Build Required', 'Voice requires a custom dev build. Use keyboard mic as workaround.');
+            setIsTranscribing(false);
+            Alert.alert('Voice Error', e.message || 'Could not start recording.');
+        }
+    };
+
+    const handleTakePhoto = async () => {
+        try {
+            const { status } = await ImagePicker.requestCameraPermissionsAsync();
+            if (status !== 'granted') {
+                Alert.alert(t('permission_denied'), t('camera_permission_msg'));
+                return;
             }
+
+            const result = await ImagePicker.launchCameraAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                quality: 0.5,
+                base64: true,
+            });
+
+            if (!result.canceled && result.assets && result.assets[0].base64) {
+                setIsAnalyzing(true);
+                try {
+                    // Try to load CSV if not loaded
+                    // Note: In Expo Go, bundleDirectory might not be directly readable like this
+                    // We'll fallback to a prompt or attempt reading from known locations
+                    let csvContent = null;
+                    try {
+                        csvContent = await FileSystem.readAsStringAsync(FileSystem.documentDirectory + 'Indian_Food_Nutrition_Processed.csv');
+                    } catch (e) {
+                        try {
+                            // Using the bundled asset
+                            const asset = Asset.fromModule(require('../../../nutrition_dataset.csv'));
+                            if (!asset.localUri) {
+                                await asset.downloadAsync();
+                            }
+                            csvContent = await FileSystem.readAsStringAsync(asset.localUri || asset.uri);
+                        } catch (e2) {
+                            console.warn('Could not bundle or read CSV file:', e2);
+                        }
+                    }
+
+                    if (csvContent) loadCsvData(csvContent);
+
+                    const identifiedItems = await identifyFoodFromImage(result.assets[0].base64);
+                    const analysis = await getCollectiveNutrients(identifiedItems);
+                    setPhotoResults(analysis);
+
+                    // Add identified foods to selected objects if they have a match
+                    const matchedFoods = analysis.breakdown
+                        .filter(item => !item.unknown)
+                        .map((item, index) => {
+                            // item.name is typically "English Name (Hindi Name)"
+                            let nameEn = item.name;
+                            let nameHi = item.name;
+                            const match = item.name.match(/^(.*)\s*\((.*)\)$/);
+                            if (match) {
+                                nameEn = match[1].trim();
+                                nameHi = match[2].trim();
+                            }
+
+                            return {
+                                id: `ai_${nameEn}_${Date.now()}_${index}`,
+                                name_en: nameEn,
+                                name_hi: nameHi,
+                                calories: item.calories,
+                                protein: item.protein,
+                                iron: item.iron,
+                                calcium: item.calcium,
+                                folate: item.folate,
+                                source: 'ai'
+                            };
+                        });
+
+                    const merged = [...selectedObjects, ...matchedFoods.filter(f => !selectedObjects.find(s => s.id === f.id))];
+                    setSelectedObjects(merged);
+                    onFoodsChange(merged);
+                } catch (err) {
+                    Alert.alert(t('analysis_failed'), err.message || t('could_not_recognize'));
+                } finally {
+                    setIsAnalyzing(false);
+                }
+            }
+        } catch (e) {
+            console.error('[StepSelection] handleTakePhoto:', e);
+            Alert.alert(t('error'), t('failed_to_open_camera'));
         }
     };
 
@@ -277,16 +531,118 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
     };
 
     const categories = [
-        { id: 'all', hi: 'सब', en: 'All' },
-        { id: 'grain', hi: 'अनाज', en: 'Grains' },
-        { id: 'vegetable', hi: 'सब्ज़ी', en: 'Veg' },
-        { id: 'protein', hi: 'प्रोटीन', en: 'Protein' },
-        { id: 'dairy', hi: 'डेरी', en: 'Dairy' },
-        { id: 'fruit', hi: 'फल', en: 'Fruit' },
+        { id: 'all', hi: t('cat_all', { returnObjects: true })?.hi || 'सब', en: t('cat_all', { returnObjects: true })?.en || 'All' },
+        { id: 'grain', hi: t('cat_grain', { returnObjects: true })?.hi || 'अनाज', en: t('cat_grain', { returnObjects: true })?.en || 'Grains' },
+        { id: 'vegetable', hi: t('cat_veg', { returnObjects: true })?.hi || 'सब्ज़ी', en: t('cat_veg', { returnObjects: true })?.en || 'Veg' },
+        { id: 'protein', hi: t('cat_protein', { returnObjects: true })?.hi || 'प्रोटीन', en: t('cat_protein', { returnObjects: true })?.en || 'Protein' },
+        { id: 'dairy', hi: t('cat_dairy', { returnObjects: true })?.hi || 'डेरी', en: t('cat_dairy', { returnObjects: true })?.en || 'Dairy' },
+        { id: 'fruit', hi: t('cat_fruit', { returnObjects: true })?.hi || 'फल', en: t('cat_fruit', { returnObjects: true })?.en || 'Fruit' },
     ];
+
+    // Unified Selection Analysis
+    const [selectionAnalysis, setSelectionAnalysis] = useState(null);
+    const [analyzingSelection, setAnalyzingSelection] = useState(false);
+
+    useEffect(() => {
+        const analyze = async () => {
+            if (selectedObjects.length === 0) {
+                setSelectionAnalysis(null);
+                return;
+            }
+            setAnalyzingSelection(true);
+            try {
+                // We use names for collective nutrients to trigger the safety rules
+                const names = selectedObjects.map(o => o.name_en);
+                const result = await getCollectiveNutrients(names);
+                setSelectionAnalysis(result);
+
+                // Automatic Speech Readout
+                if (isVoiceEnabled && result) {
+                    const allAlerts = [...result.foodAlerts, ...result.nutritionAlerts];
+                    TextToSpeechService.speakAlerts(allAlerts);
+                }
+            } catch (e) {
+                console.warn('[SelectionAnalysis] failed:', e);
+            } finally {
+                setAnalyzingSelection(false);
+            }
+        };
+        const timer = setTimeout(analyze, 500); // Debounce
+        return () => clearTimeout(timer);
+    }, [selectedObjects, isVoiceEnabled]);
+
+    const renderSelectionAnalysis = () => {
+        if (!selectionAnalysis || selectedObjects.length === 0) return null;
+
+        return (
+            <View style={styles.analysisContainer}>
+                {/* Header with Voice Toggle */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <Text style={[styles.detectedTitle, { marginBottom: 0 }]}>🥗 {t('selection_analysis')}</Text>
+                    <TouchableOpacity
+                        style={[styles.voiceToggleMini, isVoiceEnabled && styles.voiceToggleActive]}
+                        onPress={() => {
+                            const newState = !isVoiceEnabled;
+                            setIsVoiceEnabled(newState);
+                            if (!newState) TextToSpeechService.stop();
+                        }}
+                    >
+                        <Text style={{ fontSize: 16 }}>{isVoiceEnabled ? '🔊' : '🔇'}</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {/* Insights */}
+                <View style={styles.alertsContainer}>
+                    {selectionAnalysis.foodAlerts.map((alert, idx) => (
+                        <View key={`sel_food_${idx}`} style={[styles.insightCard, alert.type === 'positive' ? styles.positiveCard : styles.cautionCard]}>
+                            <Text style={styles.insightIcon}>{alert.type === 'positive' ? '✅' : 'ℹ️'}</Text>
+                            <View style={styles.insightContent}>
+                                <Text style={styles.insightTextHi}>{alert.hi}</Text>
+                                <Text style={styles.insightTextEn}>{alert.en}</Text>
+                            </View>
+                        </View>
+                    ))}
+                    {selectionAnalysis.nutritionAlerts.map((alert, idx) => (
+                        <View key={`sel_nut_${idx}`} style={[styles.insightCard, alert.type === 'positive' ? styles.positiveCard : styles.cautionCard]}>
+                            <Text style={styles.insightIcon}>{alert.type === 'positive' ? '✅' : 'ℹ️'}</Text>
+                            <View style={styles.insightContent}>
+                                <Text style={styles.insightTextHi}>{alert.hi}</Text>
+                                <Text style={styles.insightTextEn}>{alert.en}</Text>
+                            </View>
+                        </View>
+                    ))}
+                </View>
+
+                {/* Dashboard */}
+                <View style={styles.premiumDashboard}>
+                    <Text style={styles.dashboardTitle}>{t('selection_nutrition')}</Text>
+                    <View style={styles.nutGrid}>
+                        <View style={styles.nutCard}>
+                            <Text style={styles.nutValSmall}>{selectionAnalysis.totals.calories}</Text>
+                            <Text style={styles.nutLabSmall}>kcal</Text>
+                        </View>
+                        <View style={styles.nutCard}>
+                            <Text style={styles.nutValSmall}>{selectionAnalysis.totals.protein}g</Text>
+                            <Text style={styles.nutLabSmall}>Protein</Text>
+                        </View>
+                        <View style={styles.nutCard}>
+                            <Text style={styles.nutValSmall}>{selectionAnalysis.totals.iron}mg</Text>
+                            <Text style={styles.nutLabSmall}>Iron</Text>
+                        </View>
+                    </View>
+                </View>
+            </View>
+        );
+    };
 
     return (
         <View style={{ flex: 1 }}>
+            {/* Real-time Analysis overlay for all methods if items selected */}
+            {selectedObjects.length > 0 && inputMethod !== 'photo' && (
+                <View style={{ padding: 16, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border }}>
+                    {renderSelectionAnalysis()}
+                </View>
+            )}
             {/* Meal Type Toggle */}
             <View style={styles.mealToggleRow}>
                 {Object.entries(MEAL_META).map(([type, meta]) => (
@@ -299,14 +655,21 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
                         accessibilityLabel={`${meta.en}, ${meta.hi}`}
                     >
                         <Text style={styles.mealToggleEmoji}>{meta.emoji}</Text>
-                        <Text style={[styles.mealToggleText, mealType === type && { color: Colors.white }]}>{meta.hi}</Text>
+                        <Text style={[styles.mealToggleText, mealType === type && { color: Colors.white }]}>
+                            {isBilingual ? meta.hi : (isHindi ? meta.hi : meta.en)}
+                        </Text>
                     </TouchableOpacity>
                 ))}
             </View>
 
             {/* Input Method Tabs */}
             <View style={styles.methodTabRow}>
-                {[{ id: 'grid', label: '📸 चुनें' }, { id: 'voice', label: '🎤 बोलें' }, { id: 'quick', label: '📋 जल्दी' }].map(m => (
+                {[
+                    { id: 'grid', label: `📸 ${isBilingual ? 'List / लिस्ट' : (isHindi ? 'लिस्ट' : 'List')}`, emoji: '🔍' },
+                    { id: 'photo', label: `📷 ${isBilingual ? 'Photo / फोटो' : (isHindi ? 'फोटो' : 'Photo')}`, emoji: '📸' },
+                    { id: 'voice', label: `🎤 ${isBilingual ? 'Speak / बोलें' : (isHindi ? 'बोलें' : 'Speak')}`, emoji: '🎤' },
+                    { id: 'quick', label: `📋 ${isBilingual ? 'Quick / जल्दी' : (isHindi ? 'जल्दी' : 'Quick')}`, emoji: '📋' }
+                ].map(m => (
                     <TouchableOpacity
                         key={m.id}
                         style={[styles.methodTab, inputMethod === m.id && styles.methodTabActive]}
@@ -323,7 +686,7 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
                     <View style={styles.searchContainer}>
                         <TextInput
                             style={styles.searchInput}
-                            placeholder="🔍 खोजें / Search food..."
+                            placeholder={isBilingual ? "🔍 Search food / खोजें..." : (isHindi ? "🔍 खोजें..." : "🔍 Search food...")}
                             placeholderTextColor={Colors.textLight}
                             value={query}
                             onChangeText={setQuery}
@@ -337,7 +700,9 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
                                 style={[styles.catTab, activeCategory === cat.id && styles.catTabActive]}
                                 onPress={() => setActiveCategory(cat.id)}
                             >
-                                <Text style={[styles.catTabText, activeCategory === cat.id && styles.catTabTextActive]}>{cat.hi}</Text>
+                                <Text style={[styles.catTabText, activeCategory === cat.id && styles.catTabTextActive]}>
+                                    {isBilingual ? cat.hi : (isHindi ? cat.hi : cat.en)}
+                                </Text>
                             </TouchableOpacity>
                         ))}
                     </ScrollView>
@@ -348,9 +713,9 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
                             ? (
                                 <EmptyState
                                     emoji="🔍"
-                                    titleHi="कोई खाना नहीं मिला"
-                                    titleEn="No foods found"
-                                    subtitleEn={query ? `Try a different search term for "${query}"` : 'Try a different category'}
+                                    titleHi={t('no_food_found', { returnObjects: true })?.hi || "कोई खाना नहीं मिला"}
+                                    titleEn={t('no_food_found', { returnObjects: true })?.en || "No foods found"}
+                                    subtitleEn={query ? t('try_diff_search') : t('try_diff_cat')}
                                 />
                             )
                             : (
@@ -363,11 +728,11 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
                                             food={item}
                                             selected={selectedIds.includes(item.id)}
                                             onPress={() => toggleFood(item)}
+                                            onInfoPress={onFoodClick}
                                         />
                                     )}
                                     onEndReached={() => loadFoods(false)}
                                     onEndReachedThreshold={0.5}
-                                    ListFooterComponent={loading ? <ActivityIndicator style={{ margin: 20 }} color={Colors.primary} /> : <View style={{ height: 100 }} />}
                                     contentContainerStyle={styles.gridContainer}
                                 />
                             )
@@ -375,19 +740,125 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
                 </View>
             )}
 
+            {/* Photo Mode */}
+            {inputMethod === 'photo' && (
+                <ScrollView contentContainerStyle={styles.stepContent}>
+                    <Text style={styles.stepTitle}>📷 {t('identify_via_photo')}</Text>
+                    <TouchableOpacity
+                        style={[styles.micButton, { backgroundColor: Colors.primary }]}
+                        onPress={handleTakePhoto}
+                        disabled={isAnalyzing}
+                    >
+                        {isAnalyzing ? (
+                            <ActivityIndicator size="large" color={Colors.white} />
+                        ) : (
+                            <>
+                                <Text style={styles.micEmoji}>📸</Text>
+                                <Text style={styles.micLabel}>{t('take_photo')}</Text>
+                            </>
+                        )}
+                    </TouchableOpacity>
+
+                    {photoResults && (
+                        <View style={styles.analysisContainer}>
+                            <Text style={styles.detectedTitle}>🥗 {t('meal_analysis')}</Text>
+
+                            {/* Dual Alerts Section */}
+                            {(photoResults.safetyAlerts?.length > 0 || photoResults.nutritionAlerts?.length > 0) && (
+                                <View style={styles.alertsContainer}>
+                                    {photoResults.safetyAlerts?.map((alert, idx) => (
+                                        <View key={`safe_${idx}`} style={[styles.insightCard, styles.warningCard]}>
+                                            <Text style={styles.insightIcon}>⚠️</Text>
+                                            <View style={styles.insightContent}>
+                                                <Text style={styles.insightTextHi}>{alert.hi}</Text>
+                                                <Text style={styles.insightTextEn}>{alert.en}</Text>
+                                            </View>
+                                        </View>
+                                    ))}
+                                    {photoResults.nutritionAlerts?.map((alert, idx) => (
+                                        <View key={`nut_${idx}`} style={[styles.insightCard, alert.type === 'positive' ? styles.positiveCard : styles.cautionCard]}>
+                                            <Text style={styles.insightIcon}>{alert.type === 'positive' ? '✅' : 'ℹ️'}</Text>
+                                            <View style={styles.insightContent}>
+                                                <Text style={styles.insightTextHi}>{alert.hi}</Text>
+                                                <Text style={styles.insightTextEn}>{alert.en}</Text>
+                                            </View>
+                                        </View>
+                                    ))}
+                                </View>
+                            )}
+
+                            {/* Nutrition Dashboard */}
+                            <View style={styles.premiumDashboard}>
+                                <Text style={styles.dashboardTitle}>{t('total_nutrients')}</Text>
+                                <View style={styles.nutGrid}>
+                                    <View style={styles.nutCard}>
+                                        <Text style={styles.nutValSmall}>{photoResults.totals.calories}</Text>
+                                        <Text style={styles.nutLabSmall}>kcal</Text>
+                                    </View>
+                                    <View style={styles.nutCard}>
+                                        <Text style={styles.nutValSmall}>{photoResults.totals.protein}g</Text>
+                                        <Text style={styles.nutLabSmall}>{t('protein_label')}</Text>
+                                    </View>
+                                    <View style={styles.nutCard}>
+                                        <Text style={styles.nutValSmall}>{photoResults.totals.iron}mg</Text>
+                                        <Text style={styles.nutLabSmall}>{t('iron_label')}</Text>
+                                    </View>
+                                </View>
+                            </View>
+
+                            <View style={styles.itemListBox}>
+                                <Text style={styles.itemListTitle}>{t('identified_items')}:</Text>
+                                {photoResults.breakdown.map((item, idx) => (
+                                    <TouchableOpacity
+                                        key={idx}
+                                        style={styles.itemRow}
+                                        onPress={() => {
+                                            // Create a temp food object for the modal
+                                            onFoodClick({
+                                                name_en: item.name,
+                                                calories: item.calories,
+                                                protein: item.protein,
+                                                iron: item.iron,
+                                                calcium: item.calcium,
+                                                folate: item.folate
+                                            }, 1.0);
+                                        }}
+                                    >
+                                        <Text style={styles.itemName}>{item.name}</Text>
+                                        <Text style={[styles.itemPortion, item.unknown ? { color: Colors.textLight } : null]}>
+                                            {item.unknown ? t('not_found') : `${item.calories} kcal ⓘ`}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        </View>
+                    )}
+                </ScrollView>
+            )}
+
             {/* Voice Mode */}
             {inputMethod === 'voice' && (
                 <ScrollView contentContainerStyle={styles.stepContent}>
                     <TouchableOpacity
-                        style={[styles.micButton, isListening && styles.micButtonActive]}
+                        style={[
+                            styles.micButton,
+                            isListening ? styles.micButtonActive : null,
+                            isTranscribing ? { opacity: 0.7 } : null
+                        ]}
                         onPress={toggleListening}
+                        disabled={isTranscribing}
                     >
-                        <Text style={styles.micEmoji}>{isListening ? '🔴' : '🎤'}</Text>
+                        {isTranscribing ? (
+                            <ActivityIndicator size="small" color={Colors.white} />
+                        ) : (
+                            <Text style={styles.micEmoji}>{isListening ? '🔴' : '🎤'}</Text>
+                        )}
                         <Text style={styles.micLabel}>
-                            {isListening ? 'सुन रहा है... / Listening...' : 'टैप करें / Tap to speak'}
+                            {isTranscribing ? t('transcribing') :
+                                isListening ? t('stop_speaking') : t('tap_to_speak')}
                         </Text>
                     </TouchableOpacity>
-                    <Text style={styles.orText}>या टाइप करें / Or type:</Text>
+                    <Text style={styles.orText}>{t('or_type')}:</Text>
                     <TextInput
                         style={styles.voiceInput}
                         placeholder="दाल चावल रोटी / dal chawal roti..."
@@ -397,25 +868,29 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
                         multiline
                         cursorColor={Colors.primary}
                     />
-                    {detectedFoods.length > 0 && (
+                    {detectedFoods.length > 0 ? (
                         <View style={styles.detectedSection}>
-                            <Text style={styles.detectedTitle}>✅ पहचाने गए / Detected:</Text>
+                            <Text style={styles.detectedTitle}>✅ {t('detected')}:</Text>
                             <View style={styles.chipRow}>
                                 {detectedFoods.map(food => (
-                                    <View key={food.id} style={styles.foodChip}>
-                                        <Text style={styles.chipText}>{food.name_hi || food.name_en}</Text>
-                                    </View>
+                                    <TouchableOpacity
+                                        key={food.id}
+                                        style={styles.foodChip}
+                                        onPress={() => onFoodClick(food, 1.0)}
+                                    >
+                                        <Text style={styles.chipText}>{food.name_hi || food.name_en} ⓘ</Text>
+                                    </TouchableOpacity>
                                 ))}
                             </View>
                         </View>
-                    )}
+                    ) : null}
                 </ScrollView>
             )}
 
             {/* Quick Meals Mode */}
             {inputMethod === 'quick' && (
                 <ScrollView contentContainerStyle={styles.stepContent}>
-                    <Text style={styles.stepTitle}>📋 जल्दी चुनें / Quick Meals</Text>
+                    <Text style={styles.stepTitle}>📋 {t('quick_meals_title')}</Text>
                     {QuickMeals.map(qm => (
                         <TouchableOpacity key={qm.id} style={styles.quickMealCard} onPress={() => handleQuickMeal(qm)}>
                             <Text style={styles.quickMealEmoji}>{qm.emoji}</Text>
@@ -430,16 +905,16 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
             )}
 
             {/* Floating Next Button */}
-            {selectedIds.length > 0 && (
+            {selectedIds.length > 0 ? (
                 <View style={styles.floatingAction}>
                     <View style={styles.floatingInfo}>
-                        <Text style={styles.floatingTitle}>{selectedIds.length} आइटम चुने / items selected</Text>
+                        <Text style={styles.floatingTitle}>{selectedIds.length} {t('items_selected')}</Text>
                     </View>
                     <TouchableOpacity style={styles.floatingBtn} onPress={onNext}>
-                        <Text style={styles.floatingBtnText}>आगे / Next →</Text>
+                        <Text style={styles.floatingBtnText}>{t('next_btn')} →</Text>
                     </TouchableOpacity>
                 </View>
-            )}
+            ) : null}
         </View>
     );
 }
@@ -448,11 +923,12 @@ function StepSelection({ mealType, setMealType, selectedIds, onFoodsChange, onNe
 // STEP 2: INLINE PORTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function StepPortions({ selectedFoods, onUpdate, onNext }) {
+function StepPortions({ selectedFoods, onUpdate, onNext, onFoodClick }) {
+    const { t, isBilingual, isHindi } = useT();
     const portions = [
-        { label: '🥄', hi: 'कम', mult: 0.5 },
-        { label: '🍽️', hi: 'मध्यम', mult: 1.0 },
-        { label: '🍲', hi: 'ज़्यादा', mult: 1.5 },
+        { label: '🥄', hi: t('less', { returnObjects: true })?.hi || 'कम', mult: 0.5 },
+        { label: '🍽️', hi: t('medium', { returnObjects: true })?.hi || 'मध्यम', mult: 1.0 },
+        { label: '🍲', hi: t('more', { returnObjects: true })?.hi || 'ज़्यादा', mult: 1.5 },
     ];
 
     const updateMult = (foodId, mult) => {
@@ -461,11 +937,15 @@ function StepPortions({ selectedFoods, onUpdate, onNext }) {
 
     return (
         <ScrollView contentContainerStyle={styles.stepContent}>
-            <Text style={styles.stepTitle}>🥄 कितना खाया? / How much?</Text>
+            <Text style={styles.stepTitle}>🥄 {t('how_much')}</Text>
             {selectedFoods.map(sf => (
                 <View key={sf.food.id} style={styles.portionCard}>
-                    <Text style={styles.portionName}>{sf.food.name_hi || sf.food.name_en}</Text>
-                    <Text style={styles.portionNameEn}>{sf.food.name_en}</Text>
+                    <TouchableOpacity onPress={() => onFoodClick(sf.food, sf.portion_multiplier)}>
+                        <Text style={styles.portionName}>{isBilingual ? sf.food.name_en : (isHindi ? (sf.food.name_hi || sf.food.name_en) : sf.food.name_en)} ⓘ</Text>
+                        {(isBilingual || isHindi) && sf.food.name_hi && sf.food.name_en !== sf.food.name_hi && (
+                            <Text style={styles.portionNameEn}>{sf.food.name_en}</Text>
+                        )}
+                    </TouchableOpacity>
                     <View style={styles.portionPicker}>
                         {portions.map(p => (
                             <TouchableOpacity
@@ -481,7 +961,7 @@ function StepPortions({ selectedFoods, onUpdate, onNext }) {
                 </View>
             ))}
             <TouchableOpacity style={styles.primaryBtn} onPress={onNext}>
-                <Text style={styles.primaryBtnText}>👀 रिव्यू करें / Review →</Text>
+                <Text style={styles.primaryBtnText}>👀 {t('review_btn')} →</Text>
             </TouchableOpacity>
         </ScrollView>
     );
@@ -491,65 +971,165 @@ function StepPortions({ selectedFoods, onUpdate, onNext }) {
 // STEP 3: REVIEW & SAVE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function StepReview({ mealType, selectedFoods, saving, onSave }) {
+function StepReview({
+    mealType, selectedFoods, saving, onSave, onFoodClick,
+    isVoiceEnabled, setIsVoiceEnabled
+}) {
+    const { t, isHindi, isBilingual } = useT();
     const meta = MEAL_META[mealType] || MEAL_META.snack;
     const nutrition = calculateMealNutrition(
         selectedFoods.map(sf => ({ ...sf.food, portion_multiplier: sf.portion_multiplier }))
     );
-    const unsafe = selectedFoods.filter(sf => sf.food.safety_status !== 'safe');
+
+    const [foodAlerts, setFoodAlerts] = useState([]);
+    const [nutritionAlerts, setNutritionAlerts] = useState([]);
+    const [loadingAlerts, setLoadingAlerts] = useState(true);
+
+    useEffect(() => {
+        const fetchDynamicAlerts = async () => {
+            setLoadingAlerts(true);
+            try {
+                const names = selectedFoods.map(sf => sf.food.name_en || sf.food.name_hi);
+                const analysis = await getCollectiveNutrients(names);
+                setFoodAlerts(analysis.foodAlerts || []);
+                setNutritionAlerts(analysis.nutritionAlerts || []);
+
+                // Automatic Speech Readout
+                if (isVoiceEnabled && analysis) {
+                    const allAlerts = [...(analysis.foodAlerts || []), ...(analysis.nutritionAlerts || [])];
+                    TextToSpeechService.speakAlerts(allAlerts);
+                }
+            } catch (error) {
+                console.error('Groq fetch error:', error);
+            } finally {
+                setLoadingAlerts(false);
+            }
+        };
+        fetchDynamicAlerts();
+    }, [selectedFoods]);
+
+    // Manual Re-read / Trigger when toggled ON while on this screen
+    useEffect(() => {
+        if (isVoiceEnabled && !loadingAlerts && (foodAlerts.length > 0 || nutritionAlerts.length > 0)) {
+            console.log('[StepReview] Voice enabled, reading existing alerts');
+            TextToSpeechService.speakAlerts([...foodAlerts, ...nutritionAlerts]);
+        }
+    }, [isVoiceEnabled]);
+
+    const renderAlertSection = (title, alerts, icon) => {
+        if (!alerts || alerts.length === 0) return null;
+        return (
+            <View style={styles.alertSectionBlock}>
+                <Text style={styles.alertSectionHeader}>{icon} {title}</Text>
+                {alerts.map((alert, idx) => (
+                    <View key={`${title}_${idx}`} style={[
+                        styles.insightCard,
+                        alert.type === 'positive' ? styles.positiveCard :
+                            alert.type === 'warning' ? styles.warningCard :
+                                styles.cautionCard
+                    ]}>
+                        <Text style={styles.insightIcon}>
+                            {alert.type === 'positive' ? '✅' : alert.type === 'warning' ? '⚠️' : 'ℹ️'}
+                        </Text>
+                        <View style={styles.insightContent}>
+                            <Text style={styles.insightTextHi}>{alert.hi}</Text>
+                            <Text style={styles.insightTextEn}>{alert.en}</Text>
+                        </View>
+                    </View>
+                ))}
+            </View>
+        );
+    };
 
     return (
         <ScrollView contentContainerStyle={styles.stepContent}>
             <View style={styles.reviewHeader}>
                 <Text style={styles.reviewEmoji}>{meta.emoji}</Text>
                 <View>
-                    <Text style={styles.reviewTitle}>{meta.hi} / {meta.en}</Text>
+                    <Text style={styles.reviewTitle}>{isBilingual ? `${meta.hi} / ${meta.en}` : (isHindi ? meta.hi : meta.en)}</Text>
                     <Text style={styles.reviewDate}>{new Date().toLocaleDateString()}</Text>
                 </View>
             </View>
 
-            <View style={styles.summaryBox}>
-                <Text style={styles.summaryTitle}>📊 पोषण / Nutrition</Text>
-                <View style={styles.nutRow}>
-                    <View style={styles.nutItem}>
-                        <Text style={styles.nutVal}>{Math.round(nutrition.calories)}</Text>
-                        <Text style={styles.nutLab}>kcal</Text>
+            {/* Premium Nutrition Dashboard */}
+            <View style={styles.premiumDashboard}>
+                <Text style={styles.dashboardTitle}>📊 {t('total_nutrients')}</Text>
+                <View style={styles.nutGrid}>
+                    <View style={styles.nutCard}>
+                        <Text style={styles.nutValSmall}>{Math.round(nutrition.calories)}</Text>
+                        <Text style={styles.nutLabSmall}>kcal</Text>
                     </View>
-                    <View style={styles.nutItem}>
-                        <Text style={styles.nutVal}>{Math.round(nutrition.protein)}</Text>
-                        <Text style={styles.nutLab}>प्रो. (g)</Text>
+                    <View style={styles.nutCard}>
+                        <Text style={styles.nutValSmall}>{Math.round(nutrition.protein)}g</Text>
+                        <Text style={styles.nutLabSmall}>{t('protein_label')}</Text>
                     </View>
-                    <View style={styles.nutItem}>
-                        <Text style={styles.nutVal}>{Math.round(nutrition.iron)}</Text>
-                        <Text style={styles.nutLab}>आयरन (mg)</Text>
+                    <View style={styles.nutCard}>
+                        <Text style={styles.nutValSmall}>{Math.round(nutrition.iron)}mg</Text>
+                        <Text style={styles.nutLabSmall}>{t('iron_label')}</Text>
                     </View>
-                    <View style={styles.nutItem}>
-                        <Text style={styles.nutVal}>{Math.round(nutrition.calcium)}</Text>
-                        <Text style={styles.nutLab}>Ca (mg)</Text>
+                    <View style={styles.nutCard}>
+                        <Text style={styles.nutValSmall}>{Math.round(nutrition.calcium)}mg</Text>
+                        <Text style={styles.nutLabSmall}>Ca (mg)</Text>
                     </View>
                 </View>
             </View>
 
-            {unsafe.length > 0 && (
-                <View style={styles.alertBox}>
-                    <Text style={styles.alertTitle}>⚠️ सावधानी / Safety Alert</Text>
-                    {unsafe.map(sf => (
-                        <Text key={sf.food.id} style={styles.alertText}>
-                            • {sf.food.name_hi}: {sf.food.safety_status === 'avoid' ? 'परहेज करें (Avoid)' : 'कम मात्रा में (Caution)'}
-                        </Text>
-                    ))}
-                </View>
-            )}
+            {/* Split Alerts Section */}
+            <View style={styles.alertsContainer}>
+                {loadingAlerts ? (
+                    <View style={styles.loadingAlertsBox}>
+                        <ActivityIndicator color={Colors.primary} size="small" />
+                        <Text style={styles.loadingAlertsText}>📊 {t('analyzing_meal')}</Text>
+                    </View>
+                ) : (
+                    <>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 4, marginBottom: 8 }}>
+                            <Text style={styles.itemListTitle}>🥗 {t('alerts_insights')}</Text>
+                            <TouchableOpacity
+                                style={[styles.voiceToggleMini, isVoiceEnabled && styles.voiceToggleActive]}
+                                onPress={() => {
+                                    const newState = !isVoiceEnabled;
+                                    setIsVoiceEnabled(newState);
+                                    if (!newState) TextToSpeechService.stop();
+                                }}
+                            >
+                                <Text style={{ fontSize: 16 }}>{isVoiceEnabled ? `🔊 ${t('voice_on')}` : `🔇 ${t('voice_off')}`}</Text>
+                            </TouchableOpacity>
+                        </View>
+                        {renderAlertSection(`🥗 ${t('food_insights')}`, foodAlerts, '')}
+                        {renderAlertSection(`📊 ${t('nutrition_alerts')}`, nutritionAlerts, '')}
+
+                        {foodAlerts.length === 0 && nutritionAlerts.length === 0 && (
+                            <View style={[styles.insightCard, styles.positiveCard, { marginTop: 10 }]}>
+                                <Text style={styles.insightIcon}>✅</Text>
+                                <View style={styles.insightContent}>
+                                    <Text style={styles.insightTextHi}>{t('meal_balanced_hi') || 'यह भोजन संतुलित और सुरक्षित लग रहा है।'}</Text>
+                                    <Text style={styles.insightTextEn}>{t('meal_balanced_en') || 'This meal selection looks balanced and safe for you.'}</Text>
+                                </View>
+                            </View>
+                        )}
+                    </>
+                )}
+            </View>
 
             <View style={styles.itemListBox}>
-                <Text style={styles.itemListTitle}>🍽️ आइटम / Items</Text>
+                <Text style={styles.itemListTitle}>🍽️ {t('items_selected')}</Text>
                 {selectedFoods.map(sf => (
-                    <View key={sf.food.id} style={styles.itemRow}>
-                        <Text style={styles.itemName}>{sf.food.name_hi || sf.food.name_en}</Text>
+                    <TouchableOpacity
+                        key={sf.food.id}
+                        style={styles.itemRow}
+                        onPress={() => onFoodClick(sf)}
+                    >
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.itemName}>{isBilingual ? sf.food.name_en : (isHindi ? (sf.food.name_hi || sf.food.name_en) : sf.food.name_en)} ⓘ</Text>
+                            {(isBilingual || isHindi) && sf.food.name_hi && sf.food.name_en !== sf.food.name_hi && (
+                                <Text style={{ fontSize: 11, color: Colors.textLight }}>{sf.food.name_en}</Text>
+                            )}
+                        </View>
                         <Text style={styles.itemPortion}>
-                            {sf.portion_multiplier === 0.5 ? 'कम' : sf.portion_multiplier === 1.5 ? 'ज़्यादा' : 'मध्यम'}
+                            {sf.portion_multiplier === 0.5 ? t('less') : sf.portion_multiplier === 1.5 ? t('more') : t('medium')}
                         </Text>
-                    </View>
+                    </TouchableOpacity>
                 ))}
             </View>
 
@@ -560,7 +1140,7 @@ function StepReview({ mealType, selectedFoods, saving, onSave }) {
             >
                 {saving
                     ? <ActivityIndicator color={Colors.white} />
-                    : <Text style={styles.saveBtnText}>✅ {Labels.saveMeal?.hi || 'सुरक्षित करें'} / Save Meal</Text>
+                    : <Text style={styles.saveBtnText}>✅ {t('save_meal')}</Text>
                 }
             </TouchableOpacity>
         </ScrollView>
@@ -777,4 +1357,193 @@ const styles = StyleSheet.create({
         alignItems: 'center', elevation: 4,
     },
     saveBtnText: { color: Colors.white, fontSize: 17, fontWeight: '900' },
+
+    // Premium Analysis UI
+    analysisContainer: { marginTop: 16 },
+    alertsContainer: { marginBottom: 20 },
+    insightCard: {
+        flexDirection: 'row',
+        padding: 16,
+        borderRadius: 16,
+        marginBottom: 10,
+        backgroundColor: Colors.white,
+        elevation: 3,
+        shadowColor: Colors.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        borderLeftWidth: 5,
+    },
+    warningCard: { borderLeftColor: Colors.danger, backgroundColor: Colors.danger + '05' },
+    positiveCard: { borderLeftColor: Colors.success, backgroundColor: Colors.success + '05' },
+    cautionCard: { borderLeftColor: Colors.warning, backgroundColor: Colors.warning + '05' },
+    insightIcon: { fontSize: 24, marginRight: 12, marginTop: 2 },
+    insightContent: { flex: 1 },
+    insightTextHi: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary, marginBottom: 2 },
+    insightTextEn: { fontSize: 13, color: Colors.textSecondary, lineHeight: 18 },
+
+    premiumDashboard: {
+        backgroundColor: Colors.white,
+        borderRadius: 22,
+        padding: 20,
+        marginBottom: 20,
+        elevation: 4,
+        shadowColor: Colors.black,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+    },
+    dashboardTitle: { fontSize: 16, fontWeight: '800', color: Colors.textPrimary, marginBottom: 16 },
+    nutGrid: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
+    nutCard: {
+        flex: 1,
+        backgroundColor: Colors.background,
+        borderRadius: 16,
+        padding: 12,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: Colors.border,
+    },
+    nutValSmall: { fontSize: 18, fontWeight: '900', color: Colors.primary },
+    nutLabSmall: { fontSize: 10, color: Colors.textLight, fontWeight: '700', marginTop: 4, textAlign: 'center' },
+
+    // Split Alerts Styling
+    alertSectionBlock: { marginBottom: 20 },
+    alertSectionHeader: {
+        fontSize: 14,
+        fontWeight: '900',
+        color: Colors.textSecondary,
+        marginBottom: 12,
+        marginLeft: 4,
+        textTransform: 'uppercase',
+        letterSpacing: 0.5
+    },
+    loadingAlertsBox: {
+        padding: 24,
+        backgroundColor: Colors.white,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 20,
+        borderWidth: 1,
+        borderColor: Colors.primary + '30',
+        borderStyle: 'dashed'
+    },
+    loadingAlertsText: {
+        marginTop: 12,
+        fontSize: 14,
+        color: Colors.textLight,
+        fontWeight: '700',
+        textAlign: 'center'
+    },
+
+    // Modal Styles
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        padding: 24,
+    },
+    modalContent: {
+        backgroundColor: Colors.white,
+        borderRadius: 30,
+        padding: 24,
+        elevation: 10,
+        shadowColor: Colors.black,
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.3,
+        shadowRadius: 20,
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 20,
+    },
+    modalEmoji: {
+        fontSize: 32,
+        marginRight: 16,
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: '900',
+        color: Colors.textPrimary,
+        marginBottom: 2,
+    },
+    modalSubtitle: {
+        fontSize: 12,
+        color: Colors.textLight,
+        fontWeight: '700',
+        textTransform: 'uppercase',
+    },
+    closeModalText: {
+        fontSize: 24,
+        color: Colors.textLight,
+        fontWeight: '300',
+        padding: 4,
+    },
+    voiceToggleMini: {
+        backgroundColor: Colors.background,
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: Colors.border,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6
+    },
+    voiceToggleActive: {
+        backgroundColor: Colors.primary + '15',
+        borderColor: Colors.primary,
+    },
+    portionLabel: {
+        fontSize: 14,
+        color: Colors.primary,
+        fontWeight: '800',
+        marginBottom: 20,
+        textAlign: 'center',
+        backgroundColor: Colors.primary + '10',
+        paddingVertical: 8,
+        borderRadius: 12,
+    },
+    detailGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'space-between',
+        gap: 10,
+        marginBottom: 24,
+    },
+    detailCard: {
+        width: '31%',
+        backgroundColor: Colors.background,
+        borderRadius: 16,
+        padding: 12,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: Colors.border,
+        marginBottom: 4,
+    },
+    detailVal: {
+        fontSize: 18,
+        fontWeight: '900',
+        color: Colors.primary,
+    },
+    detailLab: {
+        fontSize: 9,
+        color: Colors.textLight,
+        fontWeight: '700',
+        marginTop: 4,
+        textAlign: 'center',
+    },
+    modalCloseBtn: {
+        backgroundColor: Colors.primary,
+        paddingVertical: 16,
+        borderRadius: 16,
+        alignItems: 'center',
+    },
+    modalCloseBtnText: {
+        color: Colors.white,
+        fontSize: 16,
+        fontWeight: '900',
+    },
 });
