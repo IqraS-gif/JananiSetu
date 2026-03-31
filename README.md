@@ -55,5 +55,19 @@ python app.py
 
 ---
 
+## 📈 Project Milestones & Status
+- [x] Core MVP Development (March 2026)
+- [x] AI Integration (Gemini/Groq)
+- [x] Initial ML Service Deployment
+- [ ] Beta Testing (April 2026)
+- [ ] Clinical Trials Support
+
+---
+
+## 📞 Contact & Support
+For any queries related to JananiSetu, please reach out to the project administrator.
+
+---
+
 ## 📄 License
 This project is licensed under the MIT License.
